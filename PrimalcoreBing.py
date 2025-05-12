@@ -373,7 +373,8 @@ class BingImageGeneratorGUI:
         # Store image references
         self.image_references = []
         self.generate_thread = None
-        self.is_running = False
+        self.running_event = threading.Event()  # Changed: Use threading.Event instead of is_running
+        self.running_event.clear()
         
         # Create GUI components
         self.create_widgets()
@@ -500,9 +501,9 @@ class BingImageGeneratorGUI:
             wrap="word"
         )
         scrollbar = ttk.Scrollbar(log_frame, orient=tk.VERTICAL, command=self.log_text.yview)
+        self.log_text.configure(yscrollcommand=scrollbar.set)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         self.log_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        self.log_text.configure(yscrollcommand=scrollbar.set)
         self.log_text.configure(state=tk.DISABLED)
         
         # Results tab
@@ -520,9 +521,9 @@ class BingImageGeneratorGUI:
             orient=tk.VERTICAL,
             command=self.results_text.yview
         )
+        self.results_text.configure(yscrollcommand=scrollbar.set)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         self.results_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        self.results_text.configure(yscrollcommand=scrollbar.set)
         self.results_text.configure(state=tk.DISABLED)
         
         # Preview tab
@@ -614,7 +615,7 @@ class BingImageGeneratorGUI:
         self.root.after(0, self._update_log, message, tag)
 
     def _update_log(self, message, tag):
-        """Update the log text widget."""
+        """Update the log text widget with throttling."""
         self.log_text.configure(state=tk.NORMAL)
         if self.log_text.index('end-1c') != '1.0':
             self.log_text.insert(tk.END, '\n')
@@ -627,6 +628,7 @@ class BingImageGeneratorGUI:
         
         self.log_text.see(tk.END)
         self.log_text.configure(state=tk.DISABLED)
+        self.root.update_idletasks()  # Changed: Process pending events to keep GUI responsive
 
     def clear_log(self):
         """Clear the log and results areas."""
@@ -646,7 +648,7 @@ class BingImageGeneratorGUI:
 
     def start_generation(self):
         """Start image generation in a separate thread."""
-        if self.is_running:
+        if self.running_event.is_set():  # Changed: Check running_event
             return
         
         prompt = self.prompt_entry.get().strip()
@@ -662,7 +664,7 @@ class BingImageGeneratorGUI:
             messagebox.showwarning("Warning", "Number of images must be between 1 and 4.")
             return
         
-        self.is_running = True
+        self.running_event.set()  # Changed: Set running_event
         self.generate_btn.configure(state=tk.DISABLED)
         self.stop_btn.configure(state=tk.NORMAL)
         self.update_status("Generating...")
@@ -675,12 +677,15 @@ class BingImageGeneratorGUI:
         self.generate_thread.start()
 
     def stop_generation(self):
-        """Signal to stop the image generation."""
-        if not self.is_running:
+        """Signal to stop the image generation and wait for thread to terminate."""
+        if not self.running_event.is_set():  # Changed: Check running_event
             return
-        self.is_running = False
+        self.running_event.clear()  # Changed: Clear running_event
         self.update_status("Stopping...")
         self.log_message("Stopping image generation. Please wait...", "warning")
+        if self.generate_thread:
+            self.generate_thread.join(timeout=2.0)  # Changed: Wait for thread to finish
+            self.generate_thread = None
 
     def generate_images_thread(self, prompt, download_count, output_dir, auth_cookie):
         """Run image generation in a separate thread."""
@@ -693,7 +698,7 @@ class BingImageGeneratorGUI:
             
             saved_files = generator.generate_images(prompt, download_count)
             
-            if not self.is_running:
+            if not self.running_event.is_set():  # Changed: Check running_event
                 self.root.after(0, lambda: self.log_message("Generation cancelled.", "warning"))
                 return
                 
@@ -701,7 +706,7 @@ class BingImageGeneratorGUI:
             self.root.after(0, lambda: self.log_message(f"✓ Successfully saved {len(saved_files)} images.", "success"))
             
         except Exception as e:
-            if self.is_running:
+            if self.running_event.is_set():  # Changed: Check running_event
                 self.root.after(0, lambda: self.log_message(f"✗ Error: {str(e)}", "error"))
                 self.root.after(0, self.update_status, "Error")
         finally:
@@ -709,10 +714,11 @@ class BingImageGeneratorGUI:
 
     def _reset_ui(self):
         """Reset UI elements after generation."""
-        self.is_running = False
+        self.running_event.clear()  # Changed: Clear running_event
         self.generate_btn.configure(state=tk.NORMAL)
         self.stop_btn.configure(state=tk.DISABLED)
         self.update_status("Ready")
+        self.prompt_entry.focus_set()  # Changed: Restore focus to prompt entry
 
     def update_results(self, saved_files):
         """Update the results text area with saved file paths."""
@@ -728,12 +734,16 @@ class BingImageGeneratorGUI:
             self.results_text.insert(tk.END, "No images were generated.")
             
         self.results_text.configure(state=tk.DISABLED)
+        self.prompt_entry.delete(0, tk.END)  # Changed: Clear prompt for new input
+        self.prompt_entry.focus_set()  # Changed: Set focus to prompt
 
     def clear_previews(self):
-        """Clear image previews."""
+        """Clear image previews and release resources."""
         for widget in self.image_frame.winfo_children():
             widget.destroy()
-        self.image_references.clear()
+        self.image_references = []  # Changed: Clear the list explicitly
+        import gc
+        gc.collect()  # Changed: Force garbage collection
 
     def enlarge_image(self, file_path):
         """Display the full-size image in a new window optimized for mobile."""
@@ -830,13 +840,12 @@ class BingImageGeneratorGUI:
                     font=("Helvetica", 10)
                 ).pack(pady=5)
                 
-                FORT = ttk.Button(
+                ttk.Button(
                     img_container,
                     text="Open Image",
                     command=lambda path=file_path: self.open_image(path),
                     width=12
-                )
-                FORT.pack()
+                ).pack()
                 
             except Exception as e:
                 self.log_message(f"Error loading preview for {file_path}: {str(e)}", "error")
@@ -860,7 +869,7 @@ class BingImageGeneratorGUI:
 
     def on_closing(self):
         """Handle window close."""
-        if self.is_running:
+        if self.running_event.is_set():  # Changed: Check running_event
             self.stop_generation()
             self.root.after(1000, self.root.destroy)
         else:
