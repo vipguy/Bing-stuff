@@ -19,7 +19,7 @@ A Python Tkinter GUI script to generate AI images using Bing's Image Creator (po
 
 - Python 3.7+ (tested with Pydroid 3 on Android).
 - Dependencies: `requests`, `rich`, `pillow`, `tkinter`.
-- Bing `_U` cookie (see [Setup](#setup)).
+- Bing `_U` cookie (see [Installation](#installation)).
 - Android: Storage permissions for Pydroid 3.
 
 ## Installation
@@ -32,20 +32,20 @@ Install Dependencies:
 bash
 pip install requests rich pillow
 In Pydroid 3, use the terminal tab.
-Tkinter is included; verify it works.
+Tkinter is included; verify with a test script (see Troubleshooting (#troubleshooting)).
 Get Bing Cookie:
 Log in to Bing.
-Use browser developer tools (F12) to copy the _U cookie.
+Open browser developer tools (F12), find the _U cookie in Network tab.
 Replace DEFAULT_AUTH_COOKIE in PrimalcoreBing.py (set to _U=ADD_COOKIE_HERE_) or enter it in the GUI.
 Android Permissions:
-Settings > Apps > Pydroid 3 > Permissions > Storage > Allow.
+Go to Settings > Apps > Pydroid 3 > Permissions > Storage > Allow.
 Usage
 Desktop
 Run:
 bash
 python PrimalcoreBing.py
 In GUI:
-Enter prompt (e.g., "cosmic galaxy").
+Enter a prompt (e.g., "cosmic galaxy").
 Set output directory (default: ./BingImages).
 Enter _U cookie.
 Select 1–4 images.
@@ -70,7 +70,7 @@ tk.Label(root, text="Test").pack()
 root.mainloop()
 Small Enlarged View: Uses 90% screen size. Share resolution (e.g., 1080x1920) for adjustments.
 InvalidCookieError: Update _U cookie in script or GUI.
-Permission Denied: Use /data/user/0/ru.iiec.pydroid3/files/BingImages.
+Permission Denied: Try /data/user/0/ru.iiec.pydroid3/files/BingImages.
 Contributing
 Fork, create a branch, commit changes, and open a pull request. Suggestions: pinch-to-zoom, swipe navigation.
 License
@@ -78,7 +78,6 @@ MIT License. See LICENSE.
 Acknowledgments
 Uses Tkinter, Pillow.
 Powered by Bing’s Image Creator (DALL·E).
-
 
      MIT License
 
@@ -101,3 +100,4 @@ Powered by Bing’s Image Creator (DALL·E).
      LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
      OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
      SOFTWARE.
+     
