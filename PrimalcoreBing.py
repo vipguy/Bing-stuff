@@ -2,11 +2,12 @@
 # =====================================
 # Script:     Bing Image Generator
 # Author:     Primal Core
-# Version:    1.8.2
+# Version:    1.8.4
 # Description: Fetches AI-generated images from Bing using a prompt and saves them to a specified directory.
 # License:    MIT
 # Dependencies: requests, rich, tkinter, pillow
 # Notes:      Run this script in Pydroid 3's editor, not the terminal/REPL.
+#             Tap/click image previews to enlarge them. Enlarged view optimized for mobile.
 # =====================================
 
 import os
@@ -59,7 +60,7 @@ HEADERS = {
 }
 
 # Hardcoded auth cookie (Your _U cookie value for personal use)
-DEFAULT_AUTH_COOKIE = "_U=ADD_YOUR_COOKIE_HERE"
+DEFAULT_AUTH_COOKIE = "_U=ADD_COOKIE_HERE_"
 
 # Sensitive words for prompt filtering
 SENSITIVE_WORDS = {
@@ -397,7 +398,7 @@ class BingImageGeneratorGUI:
         
         ttk.Label(
             header_frame,
-            text="v1.8.2",
+            text="v1.8.4",
             font=("Helvetica", 10)
         ).pack(side=tk.LEFT, padx=10)
         
@@ -734,8 +735,69 @@ class BingImageGeneratorGUI:
             widget.destroy()
         self.image_references.clear()
 
+    def enlarge_image(self, file_path):
+        """Display the full-size image in a new window optimized for mobile."""
+        try:
+            # Create a new Toplevel window
+            enlarge_window = tk.Toplevel(self.root)
+            enlarge_window.title(os.path.basename(file_path))
+
+            # Get screen dimensions
+            screen_width = self.root.winfo_screenwidth()
+            screen_height = self.root.winfo_screenheight()
+            window_width = int(screen_width * 0.9)  # 90% of screen width
+            window_height = int(screen_height * 0.9)  # 90% of screen height
+
+            # Center the window
+            x_offset = (screen_width - window_width) // 2
+            y_offset = (screen_height - window_height) // 2
+            enlarge_window.geometry(f"{window_width}x{window_height}+{x_offset}+{y_offset}")
+            enlarge_window.minsize(300, 400)  # Minimum size for smaller devices
+
+            # Load the full-size image
+            img = Image.open(file_path)
+            width, height = img.size
+
+            # Scale image to fit 90% of window, preserving aspect ratio
+            max_width = window_width
+            max_height = window_height - 60  # Reserve space for button
+            if width > max_width or height > max_height:
+                ratio = min(max_width / width, max_height / height)
+                new_width = int(width * ratio)
+                new_height = int(height * ratio)
+                img = img.resize((new_width, new_height), Image.LANCZOS)
+
+            tk_img = ImageTk.PhotoImage(img)
+            self.image_references.append(tk_img)  # Prevent garbage collection
+
+            # Create a frame for the image and buttons
+            frame = ttk.Frame(enlarge_window)
+            frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+
+            # Display the image
+            img_label = ttk.Label(frame, image=tk_img)
+            img_label.pack(pady=5, expand=True)
+
+            # Add a larger Close button for mobile
+            ttk.Button(
+                frame,
+                text="Close",
+                command=enlarge_window.destroy,
+                width=15,
+                style="TButton"
+            ).pack(pady=10)
+
+            # Configure button style for larger font
+            enlarge_window.option_add("*TButton*Font", "Helvetica 14")
+
+            # Make the window resizable
+            enlarge_window.resizable(True, True)
+
+        except Exception as e:
+            self.log_message(f"Error enlarging image {file_path}: {str(e)}", "error")
+
     def display_image_previews(self, file_paths):
-        """Display image previews in the preview tab."""
+        """Display image previews in the preview tab with tap-to-enlarge."""
         self.clear_previews()
         max_width = 250
         
@@ -758,6 +820,9 @@ class BingImageGeneratorGUI:
                 img_label = ttk.Label(img_container, image=tk_img)
                 img_label.pack()
                 
+                # Bind left-click/tap to enlarge the image
+                img_label.bind("<Button-1>", lambda event, path=file_path: self.enlarge_image(path))
+                
                 filename = os.path.basename(file_path)
                 ttk.Label(
                     img_container,
@@ -765,12 +830,13 @@ class BingImageGeneratorGUI:
                     font=("Helvetica", 10)
                 ).pack(pady=5)
                 
-                ttk.Button(
+                FORT = ttk.Button(
                     img_container,
                     text="Open Image",
                     command=lambda path=file_path: self.open_image(path),
                     width=12
-                ).pack()
+                )
+                FORT.pack()
                 
             except Exception as e:
                 self.log_message(f"Error loading preview for {file_path}: {str(e)}", "error")
