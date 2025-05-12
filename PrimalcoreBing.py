@@ -2,7 +2,7 @@
 # =====================================
 # Script:     Bing Image Generator
 # Author:     Primal Core
-# Version:    1.7.0
+# Version:    2.0
 # Description: Fetches AI-generated images from Bing using a prompt and saves them to a specified directory.
 # License:    MIT
 # Dependencies: requests, rich
