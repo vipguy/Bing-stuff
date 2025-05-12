@@ -2,25 +2,28 @@
 # =====================================
 # Script:     Bing Image Generator
 # Author:     Primal Core
-# Version:    2.0
+# Version:    1.8.2
 # Description: Fetches AI-generated images from Bing using a prompt and saves them to a specified directory.
 # License:    MIT
-# Dependencies: requests, rich
+# Dependencies: requests, rich, tkinter, pillow
+# Notes:      Run this script in Pydroid 3's editor, not the terminal/REPL.
 # =====================================
 
-import argparse
 import os
 import random
 import re
 import time
 import logging
+import threading
 from http.cookies import SimpleCookie
 import requests
 from urllib.parse import quote
 from rich.console import Console
-from rich.progress import Progress, BarColumn, TextColumn, TimeRemainingColumn
-from rich.table import Table
-from rich.panel import Panel
+import tkinter as tk
+import tkinter.ttk as ttk
+from tkinter import filedialog, messagebox
+from PIL import Image, ImageTk
+import io
 
 # --- Configuration ---
 
@@ -60,17 +63,11 @@ DEFAULT_AUTH_COOKIE = "_U=ADD_YOUR_COOKIE_HERE"
 
 # Sensitive words for prompt filtering
 SENSITIVE_WORDS = {
-    # Adult content
     "porn", "pornographic", "xxx", "sex", "naked", "boobs", "breasts", "penis", "vagina",
-    # Hate speech
     "racist", "nigger", "faggot", "bitch", "slut", "whore",
-    # Violence and harm
     "kill", "murder", "suicide", "abuse", "terrorist", "terrorism", "bomb", "shooting",
-    # Illegal activities
     "drug", "drugs", "cocaine", "heroin", "hack", "hacking", "piracy", "crime",
-    # Graphic content
     "gore", "blood", "mutilation", "torture", "corpse", "decapitation",
-    # Malware and phishing
     "phishing", "malware", "virus", "ransomware", "trojan",
 }
 
@@ -118,28 +115,13 @@ def setup_logging(quiet=False):
     return logging.getLogger(__name__)
 
 def parse_cookie_string(cookie_string):
-    """Parse a cookie string into a dictionary.
-
-    Args:
-        cookie_string (str): The cookie string to parse.
-
-    Returns:
-        dict: Dictionary of cookie key-value pairs.
-    """
+    """Parse a cookie string into a dictionary."""
     cookie = SimpleCookie()
     cookie.load(cookie_string)
     return {key: morsel.value for key, morsel in cookie.items()}
 
 def contains_sensitive_words(prompt, sensitive_words):
-    """Check if the prompt contains sensitive words.
-
-    Args:
-        prompt (str): The prompt to check.
-        sensitive_words (set): Set of sensitive words.
-
-    Returns:
-        tuple: (bool, str or None) indicating if a sensitive word was found and the word itself.
-    """
+    """Check if the prompt contains sensitive words."""
     prompt_lower = prompt.lower()
     for word in sensitive_words:
         pattern = fr"\b{re.escape(word)}\b"
@@ -148,25 +130,11 @@ def contains_sensitive_words(prompt, sensitive_words):
     return False, None
 
 def url_encode_prompt(prompt):
-    """URL-encode the prompt for safe use in requests.
-
-    Args:
-        prompt (str): The prompt to encode.
-
-    Returns:
-        str: URL-encoded prompt.
-    """
+    """URL-encode the prompt for safe use in requests."""
     return quote(prompt)
 
 def create_directory(output_dir):
-    """Create the output directory if it doesn't exist.
-
-    Args:
-        output_dir (str): The directory path to create.
-
-    Raises:
-        PermissionError: If the directory is not writable.
-    """
+    """Create the output directory if it doesn't exist."""
     if not os.path.exists(output_dir):
         os.makedirs(output_dir, exist_ok=True)
         console.print(f"[bold green]Created directory:[/bold green] {output_dir}")
@@ -174,155 +142,85 @@ def create_directory(output_dir):
         raise PermissionError(f"Output directory '{output_dir}' is not writable.")
 
 def generate_filename(output_dir, index):
-    """Generate a unique filename for an image.
-
-    Args:
-        output_dir (str): The directory to save the image.
-        index (int): The image index.
-
-    Returns:
-        str: The full path to the image file.
-    """
+    """Generate a unique filename for an image."""
     timestamp = time.strftime("%Y%m%d_%H%M%S")
     return os.path.join(output_dir, f"bing_image_{timestamp}_{index}.png")
-
-def get_output_dir(default_dir, quiet=False):
-    """Prompt user to choose default or custom output directory.
-
-    Args:
-        default_dir (str): The default output directory.
-        quiet (bool): Suppress prompts if True.
-
-    Returns:
-        str: The chosen output directory.
-    """
-    if quiet:
-        return default_dir
-    console.print(Panel("[bold cyan]Save Directory[/bold cyan]", expand=False))
-    console.print(f"[bold]Default directory:[/bold] {default_dir}")
-    choice = console.input("[bold yellow]Use default directory? (y/n): [/bold yellow]").strip().lower()
-    if choice in ('', 'y', 'yes'):
-        return default_dir
-    custom_dir = console.input("[bold yellow]Enter custom directory (e.g., /sdcard/Pictures/MyImages): [/bold yellow]").strip()
-    if not custom_dir:
-        console.print("[bold yellow]⚠️ No directory provided, using default.[/bold yellow]")
-        return default_dir
-    custom_dir = os.path.abspath(custom_dir)
-    if not custom_dir.startswith(('/storage/emulated/0', '/sdcard')) and os.name != "nt":
-        console.print("[bold yellow]⚠️ Invalid directory. Must be in Internal Storage. Using default.[/bold yellow]")
-        return default_dir
-    return custom_dir
 
 # --- Core Image Generator Class ---
 
 class BingImageGenerator:
-    """A class to generate and save images from Bing's AI image creator.
+    """A class to generate and save images from Bing's AI image creator."""
 
-    Attributes:
-        auth_cookie (str): Authentication cookie for Bing.
-        output_dir (str): Directory to save generated images.
-        quiet (bool): Suppress logging if True.
-        session (requests.Session): HTTP session for requests.
-        logger (logging.Logger): Logger for the class.
-    """
-
-    def __init__(self, auth_cookie=None, output_dir="BingImages", quiet=False):
-        """Initialize the Bing Image Generator.
-
-        Args:
-            auth_cookie (str, optional): Authentication cookie for Bing. Defaults to None.
-            output_dir (str): Directory to save images.
-            quiet (bool): Suppress logging if True.
-
-        Raises:
-            InvalidCookieError: If no valid cookie is provided.
-        """
+    def __init__(self, auth_cookie=None, output_dir="BingImages", quiet=False, logger_callback=None):
+        """Initialize the Bing Image Generator."""
         self.auth_cookie = auth_cookie or os.getenv("BING_AUTH_COOKIE") or DEFAULT_AUTH_COOKIE
         self.output_dir = os.path.abspath(output_dir)
         self.quiet = quiet
         self.logger = setup_logging(quiet)
         self.session = requests.Session()
         self.session.headers.update(HEADERS)
+        self.logger_callback = logger_callback
+        
         if not self.auth_cookie:
-            raise InvalidCookieError("No authentication cookie provided. Use -U or set BING_AUTH_COOKIE environment variable.")
+            raise InvalidCookieError("No authentication cookie provided.")
         self.session.cookies.update(parse_cookie_string(self.auth_cookie))
         create_directory(self.output_dir)
+    
+    def log(self, message, level="info"):
+        """Log a message using the callback if available."""
+        if self.logger_callback:
+            self.logger_callback(message, level)
+        if level == "info":
+            console.print(message)
+        elif level == "error":
+            console.print(f"[bold red]{message}[/bold red]")
+        elif level == "warning":
+            console.print(f"[bold yellow]{message}[/bold yellow]")
+        elif level == "success":
+            console.print(f"[bold green]{message}[/bold green]")
 
     def test_cookie(self):
-        """Test if the authentication cookie is valid.
-
-        Returns:
-            bool: True if the cookie is valid.
-
-        Raises:
-            InvalidCookieError: If the cookie is invalid or access is denied.
-            NetworkError: If a network error occurs.
-        """
-        console.print("[bold blue]Verifying authentication cookie...[/bold blue]")
+        """Test if the authentication cookie is valid."""
+        self.log("Verifying authentication cookie...")
         try:
             response = self.session.get(f"{BING_URL}/images/create", timeout=30)
             if response.status_code == 200 and "create" in response.url and "form" in response.text.lower():
                 self.session.cookies.update(response.cookies)
-                console.print("[bold green]✓ Cookie is valid![/bold green]")
+                self.log("✓ Cookie is valid!", "success")
                 return True
             raise InvalidCookieError(f"Invalid cookie or access denied: Status {response.status_code}")
         except requests.exceptions.RequestException as e:
             raise NetworkError(f"Cookie test failed: {str(e)}")
 
     def _try_post_request(self, url, payload):
-        """Attempt a POST request and return response if successful.
-
-        Args:
-            url (str): The URL to send the POST request to.
-            payload (str): The data to send in the POST request.
-
-        Returns:
-            requests.Response: The response if successful, else None.
-
-        Raises:
-            BlockedPromptError: If the prompt is blocked by Bing.
-            NetworkError: If a network error occurs.
-        """
+        """Attempt a POST request and return response if successful."""
         try:
             response = self.session.post(url, allow_redirects=False, data=payload, timeout=600)
             if "this prompt has been blocked" in response.text.lower():
                 raise BlockedPromptError(ERROR_BLOCKED_PROMPT)
             return response if response.status_code == 302 else None
         except requests.exceptions.RequestException as e:
-            console.print(f"[bold yellow]⚠️ POST request failed: {str(e)}[/bold yellow]")
+            self.log(f"⚠️ POST request failed: {str(e)}", "warning")
             raise NetworkError(f"POST request failed: {str(e)}")
 
     def _fallback_get_images(self, url_encoded_prompt):
-        """Fallback to GET request and parse HTML for images or redirects.
-
-        Args:
-            url_encoded_prompt (str): URL-encoded prompt.
-
-        Returns:
-            list: List of image URLs.
-
-        Raises:
-            NetworkError: If a network error occurs.
-            NoImagesError: If no images or redirects are found.
-        """
-        console.print("[bold blue]Falling back to GET request...[/bold blue]")
+        """Fallback to GET request and parse HTML for images or redirects."""
+        self.log("Falling back to GET request...")
         try:
             response = self.session.get(
                 f"{BING_URL}/images/create?q={url_encoded_prompt}&FORM=GENCRE", timeout=600
             )
-            console.print(f"[bold blue]GET response: Status {response.status_code}[/bold blue]")
+            self.log(f"GET response: Status {response.status_code}")
 
-            # Look for image links
             image_links = re.findall(r'src="([^"]+)"', response.text)
             normal_image_links = [
                 link.split("?w=")[0] for link in image_links if "?w=" in link and link.startswith("https")
             ]
             normal_image_links = list(set(normal_image_links))
             if normal_image_links:
-                console.print("[bold green]Found images in HTML fallback[/bold green]")
+                self.log("Found images in HTML fallback", "success")
                 return normal_image_links
 
-            # Look for redirect URLs
             redirect_urls = re.findall(r'location\.href\s*=\s*"([^"]+)"', response.text)
             if redirect_urls:
                 redirect_url = redirect_urls[0]
@@ -332,10 +230,9 @@ class BingImageGenerator:
                     polling_url = f"{BING_URL}/images/create/async/results/{request_id}?q={url_encoded_prompt}"
                     return self._poll_images(polling_url)
 
-            # Try form action
             form_actions = re.findall(r'<form[^>]+action="([^"]+)"', response.text)
             if form_actions:
-                console.print("[bold blue]Trying form action endpoint[/bold blue]")
+                self.log("Trying form action endpoint")
                 url = f"{BING_URL}{form_actions[0]}"
                 payload = f"q={url_encoded_prompt}&qs=ds"
                 response = self.session.post(url, allow_redirects=False, data=payload, timeout=600)
@@ -351,99 +248,59 @@ class BingImageGenerator:
             raise NetworkError(f"Fallback GET failed: {str(e)}")
 
     def _poll_images(self, polling_url):
-        """Poll the async results URL for image links.
-
-        Args:
-            polling_url (str): URL to poll for results.
-
-        Returns:
-            list: List of image URLs.
-
-        Raises:
-            TimeoutError: If polling exceeds the timeout duration.
-            NoImagesError: If no images are found.
-            NetworkError: If a network error occurs.
-        """
-        console.print("[bold blue]Waiting for Bing to generate images...[/bold blue]")
+        """Poll the async results URL for image links."""
+        self.log("Waiting for Bing to generate images...")
         start_wait = time.time()
         total_duration = 600  # 10 minutes
 
-        with Progress(
-            TextColumn("[progress.description]{task.description}"),
-            BarColumn(),
-            "[progress.percentage]{task.percentage:>3.0f}%",
-            TimeRemainingColumn(),
-            console=console
-        ) as progress:
-            task = progress.add_task("[cyan]Generating images...", total=total_duration)
-            while True:
-                elapsed = int(time.time() - start_wait)
-                if elapsed > total_duration:
-                    raise TimeoutError(ERROR_TIMEOUT)
-                progress.update(task, completed=elapsed)
-                try:
-                    response = self.session.get(polling_url, timeout=30)
-                    if response.status_code != 200:
-                        raise NoImagesError(ERROR_NORESULTS)
-                    if response.text and "errorMessage" not in response.text:
-                        break
-                    time.sleep(1)
-                except requests.exceptions.RequestException as e:
-                    console.print(f"[bold yellow]⚠️ Polling failed: {str(e)}[/bold yellow]")
-                    time.sleep(2)
+        while True:
+            elapsed = int(time.time() - start_wait)
+            if elapsed > total_duration:
+                raise TimeoutError(ERROR_TIMEOUT)
+            self.log(f"Polling for images... {elapsed}s elapsed")
+            try:
+                response = self.session.get(polling_url, timeout=30)
+                if response.status_code != 200:
+                    raise NoImagesError(ERROR_NORESULTS)
+                if response.text and "errorMessage" not in response.text:
+                    break
+                time.sleep(1)
+            except requests.exceptions.RequestException as e:
+                self.log(f"⚠️ Polling failed: {str(e)}", "warning")
+                time.sleep(2)
 
         image_links = re.findall(r'src="([^"]+)"', response.text)
         normal_image_links = [link.split("?w=")[0] for link in image_links if "?w=" in link]
         normal_image_links = list(set(normal_image_links))
         if not normal_image_links:
             raise NoImagesError(ERROR_NO_IMAGES)
-        console.print(f"[bold blue]Found {len(normal_image_links)} image links[/bold blue]")
-        console.print("[bold green]✓ Images generated successfully![/bold green]")
+        self.log(f"Found {len(normal_image_links)} image links")
+        self.log("✓ Images generated successfully!", "success")
         return normal_image_links
 
     def generate_images(self, prompt, download_count=4):
-        """Generate and save images for the given prompt.
-
-        Args:
-            prompt (str): The description of the images to generate.
-            download_count (int): Number of images to download (max 4).
-
-        Returns:
-            list: List of saved image file paths.
-
-        Raises:
-            BlockedPromptError: If the prompt contains sensitive words.
-            InvalidCookieError: If the cookie is invalid.
-            NetworkError: If a network error occurs.
-            NoImagesError: If no images are generated.
-            TimeoutError: If the request times out.
-            ValueError: If the prompt is empty or download_count is invalid.
-        """
+        """Generate and save images for the given prompt."""
         if not prompt:
             raise ValueError("Prompt cannot be empty.")
         if download_count > 4:
             raise ValueError("Download count cannot exceed 4.")
 
-        # Check sensitive words
         blocked, blocked_word = contains_sensitive_words(prompt, SENSITIVE_WORDS)
         if blocked:
             raise BlockedPromptError(f"Prompt blocked due to sensitive word: '{blocked_word}'.")
 
-        # Verify cookie
         self.test_cookie()
 
-        console.print(f"[bold blue]Generating images for prompt:[/bold blue] {prompt}")
+        self.log(f"Generating images for prompt: {prompt}")
         try:
             url_encoded_prompt = url_encode_prompt(prompt)
             payload = f"q={url_encoded_prompt}&qs=ds"
 
-            # Preload the create page
             preload_response = self.session.get(f"{BING_URL}/images/create", timeout=30)
             if preload_response.status_code == 200:
                 self.session.cookies.update(preload_response.cookies)
-                console.print("[bold blue]Preloaded page, captured cookies[/bold blue]")
+                self.log("Preloaded page, captured cookies")
 
-            # Try POST with fallbacks
             for rt in ["4", "3", None]:
                 url = f"{BING_URL}/images/create?q={url_encoded_prompt}&FORM=GENCRE"
                 if rt:
@@ -457,7 +314,6 @@ class BingImageGenerator:
                     image_links = self._poll_images(polling_url)
                     return self._save_images(image_links, download_count)
 
-            # Fallback to GET
             image_links = self._fallback_get_images(url_encoded_prompt)
             return self._save_images(image_links, download_count)
 
@@ -465,19 +321,8 @@ class BingImageGenerator:
             raise NetworkError(f"Network error: {str(e)}")
 
     def _save_images(self, links, download_count):
-        """Save images to the output directory.
-
-        Args:
-            links (list): List of image URLs.
-            download_count (int): Number of images to download.
-
-        Returns:
-            list: List of saved image file paths.
-
-        Raises:
-            NetworkError: If downloading an image fails after retries.
-        """
-        console.print(f"[bold blue]Downloading {min(download_count, len(links))} images to {self.output_dir}...[/bold blue]")
+        """Save images to the output directory."""
+        self.log(f"Downloading {min(download_count, len(links))} images to {self.output_dir}...")
         saved_files = []
         for i, link in enumerate(links[:download_count]):
             for attempt in range(3):
@@ -487,99 +332,485 @@ class BingImageGenerator:
                         filename = generate_filename(self.output_dir, i)
                         with open(filename, "wb") as f:
                             f.write(response.content)
-                        console.print(f"[bold green]✓ Saved {filename}[/bold green]")
+                        self.log(f"✓ Saved {filename}", "success")
                         saved_files.append(filename)
                         break
                     else:
-                        console.print(
-                            f"[bold yellow]⚠️ Attempt {attempt + 1}: Failed to download image {i}: "
-                            f"HTTP {response.status_code}[/bold yellow]"
+                        self.log(
+                            f"⚠️ Attempt {attempt + 1}: Failed to download image {i}: "
+                            f"HTTP {response.status_code}", "warning"
                         )
                 except requests.exceptions.RequestException as e:
-                    console.print(
-                        f"[bold yellow]⚠️ Attempt {attempt + 1}: Failed to download image {i}: {str(e)}[/bold yellow]"
+                    self.log(
+                        f"⚠️ Attempt {attempt + 1}: Failed to download image {i}: {str(e)}", "warning"
                     )
                     if attempt == 2:
-                        console.print(f"[bold red]✗ Gave up on image {i} after 3 attempts[/bold red]")
+                        self.log(f"✗ Gave up on image {i} after 3 attempts", "error")
                     time.sleep(2)
         if len(saved_files) < download_count:
-            console.print(
-                f"[bold yellow]⚠️ Only {len(saved_files)} images saved, less than requested {download_count}[/bold yellow]"
+            self.log(
+                f"⚠️ Only {len(saved_files)} images saved, less than requested {download_count}", "warning"
             )
         return saved_files
 
-# --- Command-Line Interface ---
+# --- Tkinter GUI Class ---
+
+class BingImageGeneratorGUI:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("Bing Image Generator")
+        self.root.geometry("900x750")
+        self.root.minsize(800, 600)
+        
+        # Set default output directory
+        self.default_dir = "/storage/emulated/0/DCIM/BingImages" if os.name != "nt" else "BingImages"
+        self.output_dir = tk.StringVar(value=self.default_dir)
+        self.auth_cookie = tk.StringVar(value=DEFAULT_AUTH_COOKIE)
+        self.download_count = tk.StringVar(value="4")
+        self.status_var = tk.StringVar(value="Ready")
+        
+        # Store image references
+        self.image_references = []
+        self.generate_thread = None
+        self.is_running = False
+        
+        # Create GUI components
+        self.create_widgets()
+        
+        # Bind window close
+        self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
+
+    def create_widgets(self):
+        # Main frame
+        main_frame = ttk.Frame(self.root, padding="15")
+        main_frame.pack(fill=tk.BOTH, expand=True)
+        
+        # Header
+        header_frame = ttk.Frame(main_frame)
+        header_frame.pack(fill=tk.X, pady=(0, 10))
+        
+        ttk.Label(
+            header_frame,
+            text="Bing Image Generator",
+            font=("Helvetica", 18, "bold")
+        ).pack(side=tk.LEFT)
+        
+        ttk.Label(
+            header_frame,
+            text="v1.8.2",
+            font=("Helvetica", 10)
+        ).pack(side=tk.LEFT, padx=10)
+        
+        # Input section
+        input_frame = ttk.LabelFrame(main_frame, text="Image Prompt", padding=10)
+        input_frame.pack(fill=tk.X, pady=5)
+        
+        self.prompt_entry = ttk.Entry(input_frame, font=("Helvetica", 12), width=60)
+        self.prompt_entry.pack(fill=tk.X, pady=5)
+        self.prompt_entry.bind("<Return>", lambda e: self.start_generation())
+        
+        # Settings section
+        settings_frame = ttk.LabelFrame(main_frame, text="Settings", padding=10)
+        settings_frame.pack(fill=tk.X, pady=5)
+        
+        # Output directory
+        dir_frame = ttk.Frame(settings_frame)
+        dir_frame.pack(fill=tk.X, pady=5)
+        
+        ttk.Label(dir_frame, text="Output Directory:", width=15).pack(side=tk.LEFT)
+        ttk.Entry(dir_frame, textvariable=self.output_dir, width=40).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
+        ttk.Button(dir_frame, text="Browse", command=self.browse_directory).pack(side=tk.LEFT)
+        
+        # Auth cookie
+        cookie_frame = ttk.Frame(settings_frame)
+        cookie_frame.pack(fill=tk.X, pady=5)
+        
+        ttk.Label(cookie_frame, text="Auth Cookie:", width=15).pack(side=tk.LEFT)
+        self.cookie_entry = ttk.Entry(cookie_frame, textvariable=self.auth_cookie, width=50, show="*")
+        self.cookie_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        self.show_cookie = False
+        ttk.Button(
+            cookie_frame,
+            text="Show",
+            command=self.toggle_cookie_visibility,
+            width=6
+        ).pack(side=tk.LEFT, padx=5)
+        
+        # Image count
+        count_frame = ttk.Frame(settings_frame)
+        count_frame.pack(fill=tk.X, pady=5)
+        
+        ttk.Label(count_frame, text="Images (1-4):", width=15).pack(side=tk.LEFT)
+        ttk.Spinbox(
+            count_frame,
+            from_=1,
+            to=4,
+            textvariable=self.download_count,
+            width=5
+        ).pack(side=tk.LEFT)
+        
+        # Action buttons
+        btn_frame = ttk.Frame(main_frame)
+        btn_frame.pack(fill=tk.X, pady=10)
+        
+        self.generate_btn = ttk.Button(
+            btn_frame,
+            text="Generate Images",
+            command=self.start_generation,
+            width=15
+        )
+        self.generate_btn.pack(side=tk.LEFT, padx=5)
+        
+        self.stop_btn = ttk.Button(
+            btn_frame,
+            text="Stop",
+            command=self.stop_generation,
+            width=10,
+            state=tk.DISABLED
+        )
+        self.stop_btn.pack(side=tk.LEFT, padx=5)
+        
+        ttk.Button(
+            btn_frame,
+            text="Clear Log",
+            command=self.clear_log,
+            width=10
+        ).pack(side=tk.LEFT, padx=5)
+        
+        ttk.Button(
+            btn_frame,
+            text="Open Folder",
+            command=self.open_folder,
+            width=12
+        ).pack(side=tk.LEFT, padx=5)
+        
+        # Notebook for tabs
+        notebook = ttk.Notebook(main_frame)
+        notebook.pack(fill=tk.BOTH, expand=True, pady=5)
+        
+        # Log tab
+        log_frame = ttk.Frame(notebook, padding=5)
+        notebook.add(log_frame, text="Log")
+        
+        self.log_text = tk.Text(
+            log_frame,
+            height=8,
+            font=("Consolas", 10),
+            wrap="word"
+        )
+        scrollbar = ttk.Scrollbar(log_frame, orient=tk.VERTICAL, command=self.log_text.yview)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        self.log_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        self.log_text.configure(yscrollcommand=scrollbar.set)
+        self.log_text.configure(state=tk.DISABLED)
+        
+        # Results tab
+        results_frame = ttk.Frame(notebook, padding=5)
+        notebook.add(results_frame, text="Results")
+        
+        self.results_text = tk.Text(
+            results_frame,
+            height=5,
+            font=("Consolas", 10),
+            wrap="word"
+        )
+        scrollbar = ttk.Scrollbar(
+            results_frame,
+            orient=tk.VERTICAL,
+            command=self.results_text.yview
+        )
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        self.results_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        self.results_text.configure(yscrollcommand=scrollbar.set)
+        self.results_text.configure(state=tk.DISABLED)
+        
+        # Preview tab
+        preview_frame = ttk.Frame(notebook, padding=5)
+        notebook.add(preview_frame, text="Image Preview")
+        
+        preview_container = ttk.Frame(preview_frame)
+        preview_container.pack(fill=tk.BOTH, expand=True)
+        
+        self.preview_canvas = tk.Canvas(preview_container)
+        scrollbar = ttk.Scrollbar(
+            preview_container,
+            orient=tk.VERTICAL,
+            command=self.preview_canvas.yview
+        )
+        self.preview_canvas.configure(yscrollcommand=scrollbar.set)
+        
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        self.preview_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        
+        self.image_frame = ttk.Frame(self.preview_canvas)
+        self.canvas_frame = self.preview_canvas.create_window(
+            (0, 0),
+            window=self.image_frame,
+            anchor="nw"
+        )
+        
+        self.image_frame.bind("<Configure>", self.on_frame_configure)
+        self.preview_canvas.bind("<Configure>", self.on_canvas_configure)
+        
+        # Status bar
+        status_frame = ttk.Frame(main_frame, padding=(10, 5))
+        status_frame.pack(fill=tk.X, side=tk.BOTTOM)
+        
+        ttk.Label(status_frame, text="Status:", width=10).pack(side=tk.LEFT)
+        ttk.Label(status_frame, textvariable=self.status_var).pack(side=tk.LEFT, padx=5)
+
+    def toggle_cookie_visibility(self):
+        """Toggle visibility of the auth cookie."""
+        self.show_cookie = not self.show_cookie
+        self.cookie_entry.configure(show="" if self.show_cookie else "*")
+        self.cookie_entry.master.children['!button'].configure(text="Hide" if self.show_cookie else "Show")
+
+    def on_frame_configure(self, event):
+        """Reset the scroll region to encompass the inner frame."""
+        self.preview_canvas.configure(scrollregion=self.preview_canvas.bbox("all"))
+
+    def on_canvas_configure(self, event):
+        """Update the width of the window inside the canvas."""
+        self.preview_canvas.itemconfig(self.canvas_frame, width=event.width)
+
+    def open_folder(self):
+        """Open the output directory in file explorer."""
+        dir_path = self.output_dir.get()
+        if os.path.exists(dir_path):
+            if os.name == 'nt':
+                os.startfile(dir_path)
+            elif os.name == 'posix':
+                import subprocess
+                try:
+                    subprocess.Popen(['xdg-open', dir_path])
+                except:
+                    try:
+                        subprocess.Popen(['open', dir_path])
+                    except:
+                        self.log_message("Unable to open folder automatically.", "warning")
+        else:
+            self.log_message(f"Directory does not exist: {dir_path}", "warning")
+
+    def browse_directory(self):
+        """Browse for output directory."""
+        try:
+            directory = filedialog.askdirectory()
+            if directory:
+                self.output_dir.set(directory)
+                self.log_message(f"Output directory set to: {directory}", "success")
+        except Exception as e:
+            self.log_message(f"Error selecting directory: {str(e)}", "warning")
+
+    def log_message(self, message, level="info"):
+        """Add a message to the log text area."""
+        tag = {
+            "info": "info",
+            "error": "error",
+            "warning": "warning",
+            "success": "success"
+        }.get(level, "info")
+        
+        self.root.after(0, self._update_log, message, tag)
+
+    def _update_log(self, message, tag):
+        """Update the log text widget."""
+        self.log_text.configure(state=tk.NORMAL)
+        if self.log_text.index('end-1c') != '1.0':
+            self.log_text.insert(tk.END, '\n')
+        self.log_text.insert(tk.END, f"{time.strftime('%H:%M:%S')} - {message}", tag)
+        
+        self.log_text.tag_configure("error", foreground="red")
+        self.log_text.tag_configure("warning", foreground="orange")
+        self.log_text.tag_configure("success", foreground="green")
+        self.log_text.tag_configure("info", foreground="black")
+        
+        self.log_text.see(tk.END)
+        self.log_text.configure(state=tk.DISABLED)
+
+    def clear_log(self):
+        """Clear the log and results areas."""
+        self.log_text.configure(state=tk.NORMAL)
+        self.log_text.delete(1.0, tk.END)
+        self.log_text.configure(state=tk.DISABLED)
+        
+        self.results_text.configure(state=tk.NORMAL)
+        self.results_text.delete(1.0, tk.END)
+        self.results_text.configure(state=tk.DISABLED)
+        
+        self.clear_previews()
+
+    def update_status(self, status):
+        """Update the status bar."""
+        self.status_var.set(status)
+
+    def start_generation(self):
+        """Start image generation in a separate thread."""
+        if self.is_running:
+            return
+        
+        prompt = self.prompt_entry.get().strip()
+        if not prompt:
+            messagebox.showwarning("Warning", "Please enter an image description.")
+            return
+        
+        try:
+            download_count = int(self.download_count.get())
+            if download_count < 1 or download_count > 4:
+                raise ValueError("Download count must be between 1 and 4.")
+        except ValueError:
+            messagebox.showwarning("Warning", "Number of images must be between 1 and 4.")
+            return
+        
+        self.is_running = True
+        self.generate_btn.configure(state=tk.DISABLED)
+        self.stop_btn.configure(state=tk.NORMAL)
+        self.update_status("Generating...")
+        
+        self.generate_thread = threading.Thread(
+            target=self.generate_images_thread,
+            args=(prompt, download_count, self.output_dir.get(), self.auth_cookie.get())
+        )
+        self.generate_thread.daemon = True
+        self.generate_thread.start()
+
+    def stop_generation(self):
+        """Signal to stop the image generation."""
+        if not self.is_running:
+            return
+        self.is_running = False
+        self.update_status("Stopping...")
+        self.log_message("Stopping image generation. Please wait...", "warning")
+
+    def generate_images_thread(self, prompt, download_count, output_dir, auth_cookie):
+        """Run image generation in a separate thread."""
+        try:
+            generator = BingImageGenerator(
+                auth_cookie=auth_cookie,
+                output_dir=output_dir,
+                logger_callback=self.log_message
+            )
+            
+            saved_files = generator.generate_images(prompt, download_count)
+            
+            if not self.is_running:
+                self.root.after(0, lambda: self.log_message("Generation cancelled.", "warning"))
+                return
+                
+            self.root.after(0, self.update_results, saved_files)
+            self.root.after(0, lambda: self.log_message(f"✓ Successfully saved {len(saved_files)} images.", "success"))
+            
+        except Exception as e:
+            if self.is_running:
+                self.root.after(0, lambda: self.log_message(f"✗ Error: {str(e)}", "error"))
+                self.root.after(0, self.update_status, "Error")
+        finally:
+            self.root.after(0, self._reset_ui)
+
+    def _reset_ui(self):
+        """Reset UI elements after generation."""
+        self.is_running = False
+        self.generate_btn.configure(state=tk.NORMAL)
+        self.stop_btn.configure(state=tk.DISABLED)
+        self.update_status("Ready")
+
+    def update_results(self, saved_files):
+        """Update the results text area with saved file paths."""
+        self.results_text.configure(state=tk.NORMAL)
+        self.results_text.delete(1.0, tk.END)
+        
+        if saved_files:
+            self.results_text.insert(tk.END, "Generated Images:\n")
+            for file in saved_files:
+                self.results_text.insert(tk.END, f"- {file}\n")
+            self.display_image_previews(saved_files)
+        else:
+            self.results_text.insert(tk.END, "No images were generated.")
+            
+        self.results_text.configure(state=tk.DISABLED)
+
+    def clear_previews(self):
+        """Clear image previews."""
+        for widget in self.image_frame.winfo_children():
+            widget.destroy()
+        self.image_references.clear()
+
+    def display_image_previews(self, file_paths):
+        """Display image previews in the preview tab."""
+        self.clear_previews()
+        max_width = 250
+        
+        for i, file_path in enumerate(file_paths):
+            try:
+                img_container = ttk.Frame(self.image_frame, padding=5)
+                img_container.pack(fill=tk.X, pady=10)
+                
+                img = Image.open(file_path)
+                width, height = img.size
+                if width > max_width:
+                    ratio = max_width / width
+                    new_width = max_width
+                    new_height = int(height * ratio)
+                    img = img.resize((new_width, new_height), Image.LANCZOS)
+                
+                tk_img = ImageTk.PhotoImage(img)
+                self.image_references.append(tk_img)
+                
+                img_label = ttk.Label(img_container, image=tk_img)
+                img_label.pack()
+                
+                filename = os.path.basename(file_path)
+                ttk.Label(
+                    img_container,
+                    text=filename,
+                    font=("Helvetica", 10)
+                ).pack(pady=5)
+                
+                ttk.Button(
+                    img_container,
+                    text="Open Image",
+                    command=lambda path=file_path: self.open_image(path),
+                    width=12
+                ).pack()
+                
+            except Exception as e:
+                self.log_message(f"Error loading preview for {file_path}: {str(e)}", "error")
+
+    def open_image(self, file_path):
+        """Open the image file with the default system viewer."""
+        if os.path.exists(file_path):
+            if os.name == 'nt':
+                os.startfile(file_path)
+            elif os.name == 'posix':
+                import subprocess
+                try:
+                    subprocess.Popen(['xdg-open', file_path])
+                except:
+                    try:
+                        subprocess.Popen(['open', file_path])
+                    except:
+                        self.log_message("Unable to open image automatically.", "warning")
+        else:
+            self.log_message(f"File does not exist: {file_path}", "warning")
+
+    def on_closing(self):
+        """Handle window close."""
+        if self.is_running:
+            self.stop_generation()
+            self.root.after(1000, self.root.destroy)
+        else:
+            self.root.destroy()
+
+# --- Main Application ---
 
 def main():
-    """Run the Bing Image Generator CLI."""
-    parser = argparse.ArgumentParser(description="Generate images using Bing's image creator")
-    parser.add_argument("-U", help="Auth cookie from browser (overrides BING_AUTH_COOKIE env var)", default=None)
-    parser.add_argument("--output-dir", help="Output directory (or set BING_OUTPUT_DIR env var)", default=None)
-    parser.add_argument("--download-count", help="Number of images to download (max 4)", type=int, default=4)
-    parser.add_argument("--quiet", help="Disable pipeline messages", action="store_true")
-    args = parser.parse_args()
-
-    if args.download_count > 4:
-        console.print("[bold red]✗ Error: The number of downloads must be less than five[/bold red]")
-        return
-
-    # Get output directory
-    default_dir = "/storage/emulated/0/DCIM/BingImages" if os.name != "nt" else "BingImages"
-    output_dir = args.output_dir or os.getenv("BING_OUTPUT_DIR") or get_output_dir(default_dir, args.quiet)
-
-    # Get auth cookie
-    auth_cookie = args.U or os.getenv("BING_AUTH_COOKIE") or DEFAULT_AUTH_COOKIE
-
-    # Initialize generator
-    generator = BingImageGenerator(auth_cookie, output_dir, args.quiet)
-
-    while True:
-        # Prompt for image description
-        if not args.quiet:
-            console.print(Panel("[bold cyan]Bing Image Generator[/bold cyan]", expand=False))
-            console.print("[bold]Enter a description for the images you want to generate.[/bold]")
-        prompt = console.input("[bold magenta]Description (e.g., 'A colorful abstract painting'): [/bold magenta]").strip()
-        if not prompt:
-            console.print("[bold red]✗ Error: No prompt provided. Please enter a valid image description.[/bold red]")
-            continue
-
-        try:
-            saved_files = generator.generate_images(prompt, args.download_count)
-            if not args.quiet:
-                console.print(
-                    Panel(
-                        f"[bold green]Successfully saved {len(saved_files)} images to {output_dir}[/bold green]",
-                        expand=False
-                    )
-                )
-                # Display saved files in a table
-                table = Table(title="Generated Images", show_header=True, header_style="bold cyan")
-                table.add_column("File Path", style="bold")
-                for file in saved_files:
-                    table.add_row(file)
-                console.print(table)
-                console.print("[bold blue]💡 Tip: If images don't appear in gallery, refresh the app or check with a file manager.[/bold blue]")
-
-                # Prompt to generate another image
-                choice = console.input("[bold yellow]Would you like to generate another image? (y/n): [/bold yellow]").strip().lower()
-                if choice not in ('y', 'yes'):
-                    break
-        except BingImageGenError as e:
-            console.print(f"[bold red]✗ Error: {str(e)}[/bold red]")
-            if "not writable" in str(e).lower() or "failed to create" in str(e).lower():
-                console.print(
-                    "[bold blue]💡 Tip: Ensure the application has storage permissions.[/bold blue]"
-                )
-            # Prompt to try again
-            choice = console.input("[bold yellow]Would you like to try another prompt? (y/n): [/bold yellow]").strip().lower()
-            if choice not in ('y', 'yes'):
-                break
-        except Exception as e:
-            console.print(f"[bold red]✗ Unexpected error: {str(e)}[/bold red]")
-            # Prompt to try again
-            choice = console.input("[bold yellow]Would you like to try another prompt? (y/n): [/bold yellow]").strip().lower()
-            if choice not in ('y', 'yes'):
-                break
+    """Run the Bing Image Generator GUI application."""
+    try:
+        root = tk.Tk()
+        app = BingImageGeneratorGUI(root)
+        root.mainloop()
+    except Exception as e:
+        print(f"Error initializing GUI: {str(e)}")
+        print("Please run this script in Pydroid 3's editor, not the terminal.")
 
 if __name__ == "__main__":
     main()
