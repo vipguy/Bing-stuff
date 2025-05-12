@@ -2,7 +2,7 @@
 # =====================================
 # Script:     Bing Image Generator
 # Author:     Primal Core
-# Version:    1.9
+# Version:    1.7.0
 # Description: Fetches AI-generated images from Bing using a prompt and saves them to a specified directory.
 # License:    MIT
 # Dependencies: requests, rich
@@ -397,6 +397,7 @@ class BingImageGenerator:
         normal_image_links = list(set(normal_image_links))
         if not normal_image_links:
             raise NoImagesError(ERROR_NO_IMAGES)
+        console.print(f"[bold blue]Found {len(normal_image_links)} image links[/bold blue]")
         console.print("[bold green]✓ Images generated successfully![/bold green]")
         return normal_image_links
 
@@ -514,7 +515,7 @@ def main():
     parser = argparse.ArgumentParser(description="Generate images using Bing's image creator")
     parser.add_argument("-U", help="Auth cookie from browser (overrides BING_AUTH_COOKIE env var)", default=None)
     parser.add_argument("--output-dir", help="Output directory (or set BING_OUTPUT_DIR env var)", default=None)
-    parser.add_argument("--download-count", help="Number of images to download (max 4)", type=int, default=2)
+    parser.add_argument("--download-count", help="Number of images to download (max 4)", type=int, default=4)
     parser.add_argument("--quiet", help="Disable pipeline messages", action="store_true")
     args = parser.parse_args()
 
