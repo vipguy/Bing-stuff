@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 # =====================================
 # Script:     Bing Image Generator
-# Author:     Primal Core
-# Version:    1.8.4
-# Description: Fetches AI-generated images from Bing using a prompt and saves them to a specified directory.
+# Author:     Primal Core + Updated by Assistant
+# Version:    1.8.4 + theme toggle update
+# Description: Fetches AI-generated images from Bing using a prompt and saves them to a directory.
 # License:    MIT
 # Dependencies: requests, rich, tkinter, pillow
 # Notes:      Run this script in Pydroid 3's editor, not the terminal/REPL.
@@ -24,20 +24,15 @@ import tkinter as tk
 import tkinter.ttk as ttk
 from tkinter import filedialog, messagebox
 from PIL import Image, ImageTk
-import io
 
 # --- Configuration ---
 
-# Initialize rich console
 console = Console()
 
-# Default Bing URL
 BING_URL = os.getenv("BING_URL", "https://www.bing.com")
 
-# Generate a random forwarded IP
 FORWARDED_IP = f"13.{random.randint(104, 107)}.{random.randint(0, 255)}.{random.randint(0, 255)}"
 
-# Default HTTP headers
 HEADERS = {
     "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8",
     "accept-language": "en-US,en;q=0.9",
@@ -59,10 +54,8 @@ HEADERS = {
     "upgrade-insecure-requests": "1",
 }
 
-# Hardcoded auth cookie (Your _U cookie value for personal use)
-DEFAULT_AUTH_COOKIE = "_U=YOUR_COOKIE_GOES_HERE"
+DEFAULT_AUTH_COOKIE = "_U=YOUR_COOKIE_HERE"
 
-# Sensitive words for prompt filtering
 SENSITIVE_WORDS = {
     "porn", "pornographic", "xxx", "sex", "naked", "boobs", "breasts", "penis", "vagina",
     "racist", "nigger", "faggot", "bitch", "slut", "whore",
@@ -72,7 +65,6 @@ SENSITIVE_WORDS = {
     "phishing", "malware", "virus", "ransomware", "trojan",
 }
 
-# Error messages
 ERROR_TIMEOUT = "Request timed out after 10 minutes."
 ERROR_REDIRECT = "Failed to follow redirect. Bing may have changed its API."
 ERROR_BLOCKED_PROMPT = "Prompt blocked by Bing. Try rephrasing or removing sensitive words."
@@ -161,12 +153,12 @@ class BingImageGenerator:
         self.session = requests.Session()
         self.session.headers.update(HEADERS)
         self.logger_callback = logger_callback
-        
+
         if not self.auth_cookie:
             raise InvalidCookieError("No authentication cookie provided.")
         self.session.cookies.update(parse_cookie_string(self.auth_cookie))
         create_directory(self.output_dir)
-    
+
     def log(self, message, level="info"):
         """Log a message using the callback if available."""
         if self.logger_callback:
@@ -359,162 +351,365 @@ class BingImageGenerator:
 class BingImageGeneratorGUI:
     def __init__(self, root):
         self.root = root
-        self.root.title("Bing Image Generator")
+        self.root.title("Pixel's DALL-E 3 Image Generator")
         self.root.geometry("900x750")
         self.root.minsize(800, 600)
-        
+
+        # Default theme: dark mode
+        self.current_theme = "dark"
+
         # Set default output directory
         self.default_dir = "/storage/emulated/0/DCIM/BingImages" if os.name != "nt" else "BingImages"
         self.output_dir = tk.StringVar(value=self.default_dir)
         self.auth_cookie = tk.StringVar(value=DEFAULT_AUTH_COOKIE)
         self.download_count = tk.StringVar(value="4")
         self.status_var = tk.StringVar(value="Ready")
-        
+
         # Store image references
         self.image_references = []
         self.generate_thread = None
-        self.running_event = threading.Event()  # Changed: Use threading.Event instead of is_running
+        self.running_event = threading.Event()
         self.running_event.clear()
-        
-        # Create GUI components
+
+        # Create style object
+        self.style = ttk.Style()
+
+        # Setup default theme
+        self.setup_dark_theme()
+
+        # Create GUI elements
         self.create_widgets()
-        
+
         # Bind window close
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
 
+    def setup_dark_theme(self):
+        """Configure the dark mode theme using ttk.Style."""
+        self.root.configure(bg="#000000")  # Full black background
+
+        bg_color = "#000000"
+        fg_color = "#FFFFFF"
+        entry_bg = "#000000"
+        button_bg = "#333333"
+        button_fg = "#E0E0E0"
+        scrollbar_track = "#242424"
+        scrollbar_handle = "#666666"
+
+        # Check if the "dark" theme already exists to avoid TclError
+        if "dark" not in self.style.theme_names():
+            self.style.theme_create("dark", parent="clam", settings={
+                "TFrame": {"configure": {"background": bg_color}},
+                "TLabel": {"configure": {"background": bg_color, "foreground": fg_color}},
+                "TLabelFrame": {"configure": {"background": bg_color, "foreground": fg_color}},
+                "TLabelFrame.Label": {"configure": {"background": bg_color, "foreground": fg_color}},
+                "TButton": {
+                    "configure": {
+                        "background": button_bg,
+                        "foreground": button_fg,
+                        "padding": [8, 6],
+                        "font": ("Helvetica", 12, "bold"),
+                        "relief": "flat"
+                    },
+                    "map": {
+                        "background": [("active", "#555555"), ("pressed", "#666666")],
+                        "foreground": [("active", "#FFFFFF"), ("pressed", "#FFFFFF")]
+                    }
+                },
+                "Elevated.TButton": {
+                    "configure": {
+                        "background": button_bg,
+                        "foreground": button_fg,
+                        "padding": [10, 8],
+                        "font": ("Helvetica", 12, "bold"),
+                        "relief": "flat",
+                    },
+                    "map": {
+                        "background": [("active", "#555555"), ("pressed", "#666666")],
+                        "foreground": [("active", "#FFFFFF"), ("pressed", "#FFFFFF")]
+                    }
+                },
+                "TEntry": {
+                    "configure": {
+                        "fieldbackground": entry_bg,
+                        "foreground": fg_color,
+                        "insertcolor": fg_color,
+                        "padding": [5, 5]
+                    }
+                },
+                "TSpinbox": {
+                    "configure": {
+                        "fieldbackground": entry_bg,
+                        "foreground": fg_color,
+                        "padding": [5, 5],
+                        "arrowsize": 15
+                    }
+                },
+                "TNotebook": {
+                    "configure": {"background": bg_color, "tabmargins": [5, 5, 0, 0]}
+                },
+                "TNotebook.Tab": {
+                    "configure": {
+                        "background": button_bg,
+                        "foreground": fg_color,
+                        "padding": [12, 8]
+                    },
+                    "map": {
+                        "background": [("selected", "#444444")],
+                        "foreground": [("selected", fg_color)]
+                    }
+                },
+                "Vertical.TScrollbar": {
+                    "configure": {
+                        "background": scrollbar_track,
+                        "troughcolor": scrollbar_track,
+                        "arrowcolor": fg_color
+                    },
+                    "map": {
+                        "background": [("active", scrollbar_handle)]
+                    }
+                }
+            })
+        self.style.theme_use("dark")
+
+    def setup_light_theme(self):
+        """Configure a clean light theme."""
+        self.root.configure(bg="#f0f0f0")
+
+        bg_color = "#f0f0f0"
+        fg_color = "#000000"
+        entry_bg = "#ffffff"
+        button_bg = "#e0e0e0"
+        button_fg = "#000000"
+        scrollbar_track = "#d9d9d9"
+        scrollbar_handle = "#a0a0a0"
+
+        # Check if the "light" theme already exists to avoid TclError
+        if "light" not in self.style.theme_names():
+            self.style.theme_create("light", parent="clam", settings={
+                "TFrame": {"configure": {"background": bg_color}},
+                "TLabel": {"configure": {"background": bg_color, "foreground": fg_color}},
+                "TLabelFrame": {"configure": {"background": bg_color, "foreground": fg_color}},
+                "TLabelFrame.Label": {"configure": {"background": bg_color, "foreground": fg_color}},
+                "TButton": {
+                    "configure": {
+                        "background": button_bg,
+                        "foreground": button_fg,
+                        "padding": [8, 6],
+                        "font": ("Helvetica", 12, "bold"),
+                        "relief": "flat"
+                    },
+                    "map": {
+                        "background": [("active", "#c7c7c7"), ("pressed", "#b0b0b0")],
+                        "foreground": [("active", "#000000"), ("pressed", "#000000")]
+                    }
+                },
+                "Elevated.TButton": {
+                    "configure": {
+                        "background": button_bg,
+                        "foreground": button_fg,
+                        "padding": [10, 8],
+                        "font": ("Helvetica", 12, "bold"),
+                        "relief": "flat",
+                    },
+                    "map": {
+                        "background": [("active", "#c7c7c7"), ("pressed", "#b0b0b0")],
+                        "foreground": [("active", "#000000"), ("pressed", "#000000")]
+                    }
+                },
+                "TEntry": {
+                    "configure": {
+                        "fieldbackground": entry_bg,
+                        "foreground": fg_color,
+                        "insertcolor": fg_color,
+                        "padding": [5, 5]
+                    }
+                },
+                "TSpinbox": {
+                    "configure": {
+                        "fieldbackground": entry_bg,
+                        "foreground": fg_color,
+                        "padding": [5, 5],
+                        "arrowsize": 15
+                    }
+                },
+                "TNotebook": {
+                    "configure": {"background": bg_color, "tabmargins": [5, 5, 0, 0]}
+                },
+                "TNotebook.Tab": {
+                    "configure": {
+                        "background": button_bg,
+                        "foreground": fg_color,
+                        "padding": [12, 8]
+                    },
+                    "map": {
+                        "background": [("selected", "#dcdcdc")],
+                        "foreground": [("selected", fg_color)]
+                    }
+                },
+                "Vertical.TScrollbar": {
+                    "configure": {
+                        "background": scrollbar_track,
+                        "troughcolor": scrollbar_track,
+                        "arrowcolor": fg_color
+                    },
+                    "map": {
+                        "background": [("active", scrollbar_handle)]
+                    }
+                }
+            })
+        self.style.theme_use("light")
+
     def create_widgets(self):
-        # Main frame
         main_frame = ttk.Frame(self.root, padding="15")
         main_frame.pack(fill=tk.BOTH, expand=True)
-        
-        # Header
+
+        # Header Frame
         header_frame = ttk.Frame(main_frame)
         header_frame.pack(fill=tk.X, pady=(0, 10))
-        
+
         ttk.Label(
             header_frame,
-            text="Bing Image Generator",
-            font=("Helvetica", 17, "bold")
+            text="Pixel's DALL-E 3 Image Generator",
+            font=("Helvetica", 8, "bold")
         ).pack(side=tk.LEFT)
-        
+
         ttk.Label(
             header_frame,
             text="v1.8.4",
             font=("Helvetica", 10)
         ).pack(side=tk.LEFT, padx=10)
-        
+
+        # Theme toggle button on header right
+        theme_toggle_btn = ttk.Button(header_frame, text="☆", width=4, command=self.toggle_theme)
+        theme_toggle_btn.pack(side=tk.RIGHT)
+
         # Input section
-        input_frame = ttk.LabelFrame(main_frame, text="Image Prompt", padding=10)
+        input_frame = ttk.LabelFrame(main_frame, text="Image Prompt", padding=5)
         input_frame.pack(fill=tk.X, pady=5)
-        
-        self.prompt_entry = ttk.Entry(input_frame, font=("Helvetica", 12), width=60)
+        self.prompt_entry = ttk.Entry(input_frame, font=("Helvetica", 10), width=50)
         self.prompt_entry.pack(fill=tk.X, pady=5)
         self.prompt_entry.bind("<Return>", lambda e: self.start_generation())
-        
+
         # Settings section
-        settings_frame = ttk.LabelFrame(main_frame, text="Settings", padding=10)
-        settings_frame.pack(fill=tk.X, pady=5)
-        
+        settings_frame = ttk.LabelFrame(main_frame, text="Settings", padding=5)
+        settings_frame.pack(fill=tk.X, pady=1)
+
         # Output directory
         dir_frame = ttk.Frame(settings_frame)
         dir_frame.pack(fill=tk.X, pady=5)
-        
         ttk.Label(dir_frame, text="Output Directory:", width=15).pack(side=tk.LEFT)
-        ttk.Entry(dir_frame, textvariable=self.output_dir, width=30).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
-        ttk.Button(dir_frame, text="Browse", command=self.browse_directory).pack(side=tk.LEFT)
-        
+        ttk.Entry(dir_frame, textvariable=self.output_dir).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=1)
+        ttk.Button(dir_frame, text="Browse", command=self.browse_directory, style="Elevated.TButton").pack(side=tk.LEFT, padx=1)
+
         # Auth cookie
         cookie_frame = ttk.Frame(settings_frame)
         cookie_frame.pack(fill=tk.X, pady=5)
-        
         ttk.Label(cookie_frame, text="Auth Cookie:", width=15).pack(side=tk.LEFT)
-        self.cookie_entry = ttk.Entry(cookie_frame, textvariable=self.auth_cookie, width=20, show="*")
-        self.cookie_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        self.cookie_entry = ttk.Entry(cookie_frame, textvariable=self.auth_cookie, show="*", width=29)
+        self.cookie_entry.pack(side=tk.LEFT, fill=tk.X, expand=False)
         self.show_cookie = False
-        ttk.Button(
+        self.cookie_toggle_btn = ttk.Button(
             cookie_frame,
             text="Show",
             command=self.toggle_cookie_visibility,
-            width=6
-        ).pack(side=tk.LEFT, padx=5)
-        
+            width=7,
+            style="Elevated.TButton"
+        )
+        self.cookie_toggle_btn.pack(side=tk.LEFT, padx=1)
+
         # Image count
         count_frame = ttk.Frame(settings_frame)
         count_frame.pack(fill=tk.X, pady=5)
-        
         ttk.Label(count_frame, text="Images (1-4):", width=15).pack(side=tk.LEFT)
-        ttk.Spinbox(
-            count_frame,
-            from_=1,
-            to=4,
-            textvariable=self.download_count,
-            width=5
-        ).pack(side=tk.LEFT)
-        
-        # Action buttons
+        ttk.Spinbox(count_frame, from_=1, to=4, textvariable=self.download_count, width=4).pack(side=tk.LEFT)
+
+        # Action buttons frame
         btn_frame = ttk.Frame(main_frame)
         btn_frame.pack(fill=tk.X, pady=10)
-        
+
+        # Create a shadow label to simulate elevation
+        self.generate_shadow = tk.Label(btn_frame, bg="#111111")
+        self.generate_shadow.place(x=5, y=5, width=90, height=30)
+
         self.generate_btn = ttk.Button(
             btn_frame,
-            text="Generate Images",
+            text="Generate!",
             command=self.start_generation,
-            width=15
+            width=12,
+            style="Elevated.TButton"
         )
         self.generate_btn.pack(side=tk.LEFT, padx=5)
-        
+
+        self.stop_shadow = tk.Label(btn_frame, bg="#111111")
+        self.stop_shadow.place(x=105, y=5, width=50, height=30)
+
         self.stop_btn = ttk.Button(
             btn_frame,
             text="Stop",
             command=self.stop_generation,
-            width=10,
-            state=tk.DISABLED
+            width=6,
+            state=tk.DISABLED,
+            style="Elevated.TButton"
         )
         self.stop_btn.pack(side=tk.LEFT, padx=5)
-        
+
+        clear_shadow = tk.Label(btn_frame, bg="#111111")
+        clear_shadow.place(x=165, y=5, width=90, height=30)
+
         ttk.Button(
             btn_frame,
             text="Clear Log",
             command=self.clear_log,
-            width=10
+            width=12,
+            style="Elevated.TButton"
         ).pack(side=tk.LEFT, padx=5)
-        
+
+        open_dir_shadow = tk.Label(btn_frame, bg="#111111")
+        open_dir_shadow.place(x=265, y=5, width=90, height=30)
+
         ttk.Button(
             btn_frame,
-            text="Open Folder",
+            text="Open Dir",
             command=self.open_folder,
-            width=12
+            width=12,
+            style="Elevated.TButton"
         ).pack(side=tk.LEFT, padx=5)
-        
+
         # Notebook for tabs
         notebook = ttk.Notebook(main_frame)
         notebook.pack(fill=tk.BOTH, expand=True, pady=5)
-        
+
         # Log tab
         log_frame = ttk.Frame(notebook, padding=5)
         notebook.add(log_frame, text="Log")
-        
+
         self.log_text = tk.Text(
             log_frame,
             height=8,
             font=("Consolas", 10),
-            wrap="word"
+            wrap="word",
+            bg="#000000" if self.current_theme == "dark" else "#FFFFFF",
+            fg="#FFFFFF" if self.current_theme == "dark" else "#000000",
+            insertbackground="#FFFFFF" if self.current_theme == "dark" else "#000000"
         )
         scrollbar = ttk.Scrollbar(log_frame, orient=tk.VERTICAL, command=self.log_text.yview)
         self.log_text.configure(yscrollcommand=scrollbar.set)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         self.log_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         self.log_text.configure(state=tk.DISABLED)
-        
+
         # Results tab
         results_frame = ttk.Frame(notebook, padding=5)
         notebook.add(results_frame, text="Results")
-        
+
         self.results_text = tk.Text(
             results_frame,
             height=5,
             font=("Consolas", 10),
-            wrap="word"
+            wrap="word",
+            bg="#000000" if self.current_theme == "dark" else "#FFFFFF",
+            fg="#FFFFFF" if self.current_theme == "dark" else "#000000",
+            insertbackground="#FFFFFF" if self.current_theme == "dark" else "#000000"
         )
         scrollbar = ttk.Scrollbar(
             results_frame,
@@ -525,47 +720,50 @@ class BingImageGeneratorGUI:
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         self.results_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         self.results_text.configure(state=tk.DISABLED)
-        
+
         # Preview tab
         preview_frame = ttk.Frame(notebook, padding=5)
         notebook.add(preview_frame, text="Image Preview")
-        
+
         preview_container = ttk.Frame(preview_frame)
         preview_container.pack(fill=tk.BOTH, expand=True)
-        
-        self.preview_canvas = tk.Canvas(preview_container)
+
+        self.preview_canvas = tk.Canvas(
+            preview_container,
+            bg="#000000" if self.current_theme == "dark" else "#FFFFFF",
+            highlightthickness=0
+        )
         scrollbar = ttk.Scrollbar(
             preview_container,
             orient=tk.VERTICAL,
             command=self.preview_canvas.yview
         )
         self.preview_canvas.configure(yscrollcommand=scrollbar.set)
-        
+
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         self.preview_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        
+
         self.image_frame = ttk.Frame(self.preview_canvas)
         self.canvas_frame = self.preview_canvas.create_window(
             (0, 0),
             window=self.image_frame,
             anchor="nw"
         )
-        
+
         self.image_frame.bind("<Configure>", self.on_frame_configure)
         self.preview_canvas.bind("<Configure>", self.on_canvas_configure)
-        
+
         # Status bar
         status_frame = ttk.Frame(main_frame, padding=(10, 5))
         status_frame.pack(fill=tk.X, side=tk.BOTTOM)
-        
-        ttk.Label(status_frame, text="Status:", width=10).pack(side=tk.LEFT)
-        ttk.Label(status_frame, textvariable=self.status_var).pack(side=tk.LEFT, padx=5)
+
+        ttk.Label(status_frame, text="Status:", width=7).pack(side=tk.LEFT)
+        ttk.Label(status_frame, textvariable=self.status_var).pack(side=tk.LEFT, padx=2)
 
     def toggle_cookie_visibility(self):
-        """Toggle visibility of the auth cookie."""
         self.show_cookie = not self.show_cookie
         self.cookie_entry.configure(show="" if self.show_cookie else "*")
-        self.cookie_entry.master.children['!button'].configure(text="Hide" if self.show_cookie else "Show")
+        self.cookie_toggle_btn.configure(text="Hide" if self.show_cookie else "Show")
 
     def on_frame_configure(self, event):
         """Reset the scroll region to encompass the inner frame."""
@@ -611,7 +809,7 @@ class BingImageGeneratorGUI:
             "warning": "warning",
             "success": "success"
         }.get(level, "info")
-        
+
         self.root.after(0, self._update_log, message, tag)
 
     def _update_log(self, message, tag):
@@ -620,26 +818,26 @@ class BingImageGeneratorGUI:
         if self.log_text.index('end-1c') != '1.0':
             self.log_text.insert(tk.END, '\n')
         self.log_text.insert(tk.END, f"{time.strftime('%H:%M:%S')} - {message}", tag)
-        
-        self.log_text.tag_configure("error", foreground="red")
-        self.log_text.tag_configure("warning", foreground="orange")
-        self.log_text.tag_configure("success", foreground="green")
-        self.log_text.tag_configure("info", foreground="black")
-        
+
+        self.log_text.tag_configure("error", foreground="#FF5555")  # Red for errors
+        self.log_text.tag_configure("warning", foreground="#FFAA00")  # Orange for warnings
+        self.log_text.tag_configure("success", foreground="#55FF55")  # Green for success
+        self.log_text.tag_configure("info", foreground="#E0E0E0" if self.current_theme == "dark" else "#444444")  # Info color
+
         self.log_text.see(tk.END)
         self.log_text.configure(state=tk.DISABLED)
-        self.root.update_idletasks()  # Changed: Process pending events to keep GUI responsive
+        self.root.update_idletasks()
 
     def clear_log(self):
         """Clear the log and results areas."""
         self.log_text.configure(state=tk.NORMAL)
         self.log_text.delete(1.0, tk.END)
         self.log_text.configure(state=tk.DISABLED)
-        
+
         self.results_text.configure(state=tk.NORMAL)
         self.results_text.delete(1.0, tk.END)
         self.results_text.configure(state=tk.DISABLED)
-        
+
         self.clear_previews()
 
     def update_status(self, status):
@@ -648,14 +846,14 @@ class BingImageGeneratorGUI:
 
     def start_generation(self):
         """Start image generation in a separate thread."""
-        if self.running_event.is_set():  # Changed: Check running_event
+        if self.running_event.is_set():
             return
-        
+
         prompt = self.prompt_entry.get().strip()
         if not prompt:
             messagebox.showwarning("Warning", "Please enter an image description.")
             return
-        
+
         try:
             download_count = int(self.download_count.get())
             if download_count < 1 or download_count > 4:
@@ -663,12 +861,12 @@ class BingImageGeneratorGUI:
         except ValueError:
             messagebox.showwarning("Warning", "Number of images must be between 1 and 4.")
             return
-        
-        self.running_event.set()  # Changed: Set running_event
+
+        self.running_event.set()
         self.generate_btn.configure(state=tk.DISABLED)
         self.stop_btn.configure(state=tk.NORMAL)
         self.update_status("Generating...")
-        
+
         self.generate_thread = threading.Thread(
             target=self.generate_images_thread,
             args=(prompt, download_count, self.output_dir.get(), self.auth_cookie.get())
@@ -678,13 +876,13 @@ class BingImageGeneratorGUI:
 
     def stop_generation(self):
         """Signal to stop the image generation and wait for thread to terminate."""
-        if not self.running_event.is_set():  # Changed: Check running_event
+        if not self.running_event.is_set():
             return
-        self.running_event.clear()  # Changed: Clear running_event
+        self.running_event.clear()
         self.update_status("Stopping...")
         self.log_message("Stopping image generation. Please wait...", "warning")
         if self.generate_thread:
-            self.generate_thread.join(timeout=2.0)  # Changed: Wait for thread to finish
+            self.generate_thread.join(timeout=2.0)
             self.generate_thread = None
 
     def generate_images_thread(self, prompt, download_count, output_dir, auth_cookie):
@@ -695,18 +893,18 @@ class BingImageGeneratorGUI:
                 output_dir=output_dir,
                 logger_callback=self.log_message
             )
-            
+
             saved_files = generator.generate_images(prompt, download_count)
-            
-            if not self.running_event.is_set():  # Changed: Check running_event
+
+            if not self.running_event.is_set():
                 self.root.after(0, lambda: self.log_message("Generation cancelled.", "warning"))
                 return
-                
+
             self.root.after(0, self.update_results, saved_files)
             self.root.after(0, lambda: self.log_message(f"✓ Successfully saved {len(saved_files)} images.", "success"))
-            
+
         except Exception as e:
-            if self.running_event.is_set():  # Changed: Check running_event
+            if self.running_event.is_set():
                 self.root.after(0, lambda: self.log_message(f"✗ Error: {str(e)}", "error"))
                 self.root.after(0, self.update_status, "Error")
         finally:
@@ -714,17 +912,17 @@ class BingImageGeneratorGUI:
 
     def _reset_ui(self):
         """Reset UI elements after generation."""
-        self.running_event.clear()  # Changed: Clear running_event
+        self.running_event.clear()
         self.generate_btn.configure(state=tk.NORMAL)
         self.stop_btn.configure(state=tk.DISABLED)
         self.update_status("Ready")
-        self.prompt_entry.focus_set()  # Changed: Restore focus to prompt entry
+        self.prompt_entry.focus_set()
 
     def update_results(self, saved_files):
         """Update the results text area with saved file paths."""
         self.results_text.configure(state=tk.NORMAL)
         self.results_text.delete(1.0, tk.END)
-        
+
         if saved_files:
             self.results_text.insert(tk.END, "Generated Images:\n")
             for file in saved_files:
@@ -732,45 +930,53 @@ class BingImageGeneratorGUI:
             self.display_image_previews(saved_files)
         else:
             self.results_text.insert(tk.END, "No images were generated.")
-            
+
         self.results_text.configure(state=tk.DISABLED)
-        self.prompt_entry.delete(0, tk.END)  # Changed: Clear prompt for new input
-        self.prompt_entry.focus_set()  # Changed: Set focus to prompt
+        self.prompt_entry.delete(0, tk.END)
+        self.prompt_entry.focus_set()
 
     def clear_previews(self):
         """Clear image previews and release resources."""
         for widget in self.image_frame.winfo_children():
             widget.destroy()
-        self.image_references = []  # Changed: Clear the list explicitly
+        self.image_references = []
         import gc
-        gc.collect()  # Changed: Force garbage collection
+        gc.collect()
 
     def enlarge_image(self, file_path):
         """Display the full-size image in a new window optimized for mobile."""
         try:
-            # Create a new Toplevel window
             enlarge_window = tk.Toplevel(self.root)
             enlarge_window.title(os.path.basename(file_path))
+            enlarge_window.configure(bg="#000000" if self.current_theme == "dark" else "#FFFFFF")
 
-            # Get screen dimensions
+            # Apply current theme styles
+            if self.current_theme == "dark":
+                style = ttk.Style(enlarge_window)
+                style.theme_use("dark")
+            else:
+                style = ttk.Style(enlarge_window)
+                style.theme_use("light")
+
+            # Screen dimensions setup
             screen_width = self.root.winfo_screenwidth()
             screen_height = self.root.winfo_screenheight()
-            window_width = int(screen_width * 0.9)  # 90% of screen width
-            window_height = int(screen_height * 0.9)  # 90% of screen height
 
-            # Center the window
+            window_width = int(screen_width * 0.9)
+            window_height = int(screen_height * 0.9)
+
             x_offset = (screen_width - window_width) // 2
             y_offset = (screen_height - window_height) // 2
-            enlarge_window.geometry(f"{window_width}x{window_height}+{x_offset}+{y_offset}")
-            enlarge_window.minsize(300, 400)  # Minimum size for smaller devices
 
-            # Load the full-size image
+            enlarge_window.geometry(f"{window_width}x{window_height}+{x_offset}+{y_offset}")
+            enlarge_window.minsize(300, 400)
+            enlarge_window.resizable(True, True)
+
             img = Image.open(file_path)
             width, height = img.size
 
-            # Scale image to fit 90% of window, preserving aspect ratio
             max_width = window_width
-            max_height = window_height - 60  # Reserve space for button
+            max_height = window_height - 60
             if width > max_width or height > max_height:
                 ratio = min(max_width / width, max_height / height)
                 new_width = int(width * ratio)
@@ -778,30 +984,22 @@ class BingImageGeneratorGUI:
                 img = img.resize((new_width, new_height), Image.LANCZOS)
 
             tk_img = ImageTk.PhotoImage(img)
-            self.image_references.append(tk_img)  # Prevent garbage collection
+            self.image_references.append(tk_img)
 
-            # Create a frame for the image and buttons
             frame = ttk.Frame(enlarge_window)
             frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
 
-            # Display the image
             img_label = ttk.Label(frame, image=tk_img)
             img_label.pack(pady=5, expand=True)
 
-            # Add a larger Close button for mobile
             ttk.Button(
                 frame,
                 text="Close",
                 command=enlarge_window.destroy,
-                width=15,
-                style="TButton"
+                width=15
             ).pack(pady=10)
 
-            # Configure button style for larger font
             enlarge_window.option_add("*TButton*Font", "Helvetica 14")
-
-            # Make the window resizable
-            enlarge_window.resizable(True, True)
 
         except Exception as e:
             self.log_message(f"Error enlarging image {file_path}: {str(e)}", "error")
@@ -810,12 +1008,12 @@ class BingImageGeneratorGUI:
         """Display image previews in the preview tab with tap-to-enlarge."""
         self.clear_previews()
         max_width = 250
-        
+
         for i, file_path in enumerate(file_paths):
             try:
                 img_container = ttk.Frame(self.image_frame, padding=5)
                 img_container.pack(fill=tk.X, pady=10)
-                
+
                 img = Image.open(file_path)
                 width, height = img.size
                 if width > max_width:
@@ -823,30 +1021,30 @@ class BingImageGeneratorGUI:
                     new_width = max_width
                     new_height = int(height * ratio)
                     img = img.resize((new_width, new_height), Image.LANCZOS)
-                
+
                 tk_img = ImageTk.PhotoImage(img)
                 self.image_references.append(tk_img)
-                
+
                 img_label = ttk.Label(img_container, image=tk_img)
                 img_label.pack()
-                
-                # Bind left-click/tap to enlarge the image
+
                 img_label.bind("<Button-1>", lambda event, path=file_path: self.enlarge_image(path))
-                
+
                 filename = os.path.basename(file_path)
                 ttk.Label(
                     img_container,
                     text=filename,
                     font=("Helvetica", 10)
                 ).pack(pady=5)
-                
+
                 ttk.Button(
                     img_container,
-                    text="Open Image",
+                    text="Open",
                     command=lambda path=file_path: self.open_image(path),
-                    width=12
+                    width=12,
+                    style="Elevated.TButton"
                 ).pack()
-                
+
             except Exception as e:
                 self.log_message(f"Error loading preview for {file_path}: {str(e)}", "error")
 
@@ -869,16 +1067,41 @@ class BingImageGeneratorGUI:
 
     def on_closing(self):
         """Handle window close."""
-        if self.running_event.is_set():  # Changed: Check running_event
+        if self.running_event.is_set():
             self.stop_generation()
             self.root.after(1000, self.root.destroy)
         else:
             self.root.destroy()
 
+    def toggle_theme(self):
+        """Toggle between dark and light themes."""
+        if self.current_theme == "dark":
+            self.setup_light_theme()
+            self.current_theme = "light"
+        else:
+            self.setup_dark_theme()
+            self.current_theme = "dark"
+
+        # Update widget colors for text widgets and canvas backgrounds
+        bg_color = "#000000" if self.current_theme == "dark" else "#FFFFFF"
+        fg_color = "#FFFFFF" if self.current_theme == "dark" else "#000000"
+
+        self.log_text.configure(bg=bg_color, fg=fg_color, insertbackground=fg_color)
+        self.results_text.configure(bg=bg_color, fg=fg_color, insertbackground=fg_color)
+        self.preview_canvas.configure(bg=bg_color)
+
+        # Update status bar color if needed
+        # Force refresh the window to update styles
+        self.root.update_idletasks()
+
+        # Also update buttons' shadows to fit theme
+        shadow_color = "#111111" if self.current_theme == "dark" else "#bbbbbb"
+        for shadow in [self.generate_shadow, self.stop_shadow]:
+            shadow.configure(bg=shadow_color)
+
 # --- Main Application ---
 
 def main():
-    """Run the Bing Image Generator GUI application."""
     try:
         root = tk.Tk()
         app = BingImageGeneratorGUI(root)
