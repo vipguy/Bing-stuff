@@ -60,7 +60,7 @@ HEADERS = {
 }
 
 # Hardcoded auth cookie (Your _U cookie value for personal use)
-DEFAULT_AUTH_COOKIE = "_U=ADD_COOKIE_HERE_"
+DEFAULT_AUTH_COOKIE = "_U=YOUR_COOKIE_GOES_HERE"
 
 # Sensitive words for prompt filtering
 SENSITIVE_WORDS = {
@@ -394,7 +394,7 @@ class BingImageGeneratorGUI:
         ttk.Label(
             header_frame,
             text="Bing Image Generator",
-            font=("Helvetica", 18, "bold")
+            font=("Helvetica", 17, "bold")
         ).pack(side=tk.LEFT)
         
         ttk.Label(
@@ -420,7 +420,7 @@ class BingImageGeneratorGUI:
         dir_frame.pack(fill=tk.X, pady=5)
         
         ttk.Label(dir_frame, text="Output Directory:", width=15).pack(side=tk.LEFT)
-        ttk.Entry(dir_frame, textvariable=self.output_dir, width=40).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
+        ttk.Entry(dir_frame, textvariable=self.output_dir, width=30).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
         ttk.Button(dir_frame, text="Browse", command=self.browse_directory).pack(side=tk.LEFT)
         
         # Auth cookie
@@ -428,7 +428,7 @@ class BingImageGeneratorGUI:
         cookie_frame.pack(fill=tk.X, pady=5)
         
         ttk.Label(cookie_frame, text="Auth Cookie:", width=15).pack(side=tk.LEFT)
-        self.cookie_entry = ttk.Entry(cookie_frame, textvariable=self.auth_cookie, width=50, show="*")
+        self.cookie_entry = ttk.Entry(cookie_frame, textvariable=self.auth_cookie, width=20, show="*")
         self.cookie_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
         self.show_cookie = False
         ttk.Button(
