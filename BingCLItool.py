@@ -2,12 +2,11 @@
 # =====================================
 # Script:     Pixel's DALL-E Image Generator CLI
 # Author:     Primal Core
-# Version:    1.9.6
+# Version:    1.9.8
 # Description: A professional CLI tool to fetch AI-generated images with interactive style variations.
 # License:    MIT
-# Dependencies: requests, rich
-# Usage:      Run it 
-=====================================
+# Dependencies: requests, rich, Pillow
+# Usage:      Run it =====================================
 
 import os
 import random
@@ -15,19 +14,25 @@ import re
 import time
 import logging
 import argparse
+import glob
+import subprocess
+import platform
 from urllib.parse import quote
 from http.cookies import SimpleCookie
 import requests
+from PIL import Image
+from io import BytesIO
+
 try:
     from rich.console import Console
     from rich.logging import RichHandler
-    from rich.progress import track
+    from rich.progress import track, Progress
     from rich.table import Table
     from rich.panel import Panel
     from rich.prompt import Prompt, IntPrompt, Confirm
     console = Console()
 except ImportError:
-    print("Error: 'rich' library is not installed. Please run 'pip install rich'.")
+    print("Error: Required libraries ('rich', 'Pillow') are not installed. Please run 'pip install rich Pillow'.")
     exit(1)
 
 # --- Configuration ---
@@ -58,7 +63,7 @@ HEADERS = {
     "upgrade-insecure-requests": "1",
 }
 
-DEFAULT_AUTH_COOKIE = "_U=YOUR_COOKIE_QUICK_SLOT"
+DEFAULT_AUTH_COOKIE = "_U=YOUR_COOKIE_HERE"
 
 SENSITIVE_WORDS = {"porn", "sex", "naked", "kill", "drug", "gore"}
 
@@ -108,7 +113,7 @@ def setup_logging(log_level="INFO"):
 
 def load_config():
     """Load settings from config file if it exists."""
-    config = {"cookie": DEFAULT_AUTH_COOKIE, "output_dir": "/storage/emulated/0/PixelImages"}
+    config = {"cookie": DEFAULT_AUTH_COOKIE, "output_dir": os.path.abspath("./PixelImages")}
     if os.path.exists(CONFIG_FILE):
         with open(CONFIG_FILE, "r") as f:
             for line in f:
@@ -131,11 +136,11 @@ def create_directory(output_dir):
     if not os.access(output_dir, os.W_OK):
         raise PermissionError(f"Output directory '{output_dir}' is not writable.")
 
-def generate_filename(output_dir, index, style=None):
+def generate_filename(output_dir, index, style=None, file_format='png'):
     """Generate a unique filename for an image, including style if provided."""
     timestamp = time.strftime("%Y%m%d_%H%M%S")
     style_part = f"_{style.replace(' ', '_')}" if style else ""
-    return os.path.join(output_dir, f"pixel_image{style_part}_{timestamp}_{index}.png")
+    return os.path.join(output_dir, f"pixel_image{style_part}_{timestamp}_{index}.{file_format}")
 
 def contains_sensitive_words(prompt):
     """Check if the prompt contains sensitive words."""
@@ -163,6 +168,131 @@ def retry_request(func, max_attempts=3, base_delay=2):
             delay = base_delay * (2 ** attempt)
             console.print(f"[yellow]Attempt {attempt + 1} failed: {str(e)}. Retrying in {delay}s...[/yellow]")
             time.sleep(delay)
+
+def generate_thumbnails(generator):
+    """Generate thumbnails for all images in the output directory."""
+    image_extensions = ["*.png", "*.jpg", "*.jpeg"]
+    image_files = []
+    for ext in image_extensions:
+        image_files.extend(glob.glob(os.path.join(generator.output_dir, ext)))
+    
+    if not image_files:
+        console.print("[yellow]No images found in output directory.[/yellow]")
+        return
+    
+    console.print(f"[bold cyan]Generating thumbnails for {len(image_files)} images...[/bold cyan]")
+    with Progress() as progress:
+        task = progress.add_task("[cyan]Generating thumbnails...", total=len(image_files))
+        for image_path in image_files:
+            thumbnail_path = os.path.splitext(image_path)[0] + "_thumb.png"
+            try:
+                generator.create_thumbnail(image_path, thumbnail_path)
+                console.print(f"[green]Generated thumbnail: {os.path.basename(thumbnail_path)}[/green]")
+            except Exception as e:
+                console.print(f"[red]Error generating thumbnail for {os.path.basename(image_path)}: {str(e)}[/red]")
+                generator.log(f"Error generating thumbnail for {image_path}: {str(e)}", "error")
+            progress.update(task, advance=1)
+
+def list_generated_images(output_dir):
+    """List all images in the output directory with details."""
+    image_extensions = ["*.png", "*.jpg", "*.jpeg"]
+    image_files = []
+    for ext in image_extensions:
+        image_files.extend(glob.glob(os.path.join(output_dir, ext)))
+    
+    if not image_files:
+        console.print("[yellow]No images found in output directory.[/yellow]")
+        return
+    
+    table = Table(title="[bold cyan]Generated Images[/bold cyan]", show_header=True, header_style="bold magenta")
+    table.add_column("Filename", style="cyan")
+    table.add_column("Style", style="white")
+    table.add_column("Creation Time", style="white")
+    
+    for image_path in image_files:
+        filename = os.path.basename(image_path)
+        # Extract style from filename (assumes format: pixel_image_<style>_timestamp_index.ext)
+        style_match = re.search(r'pixel_image_([^_]+)_[\d_]+\.\w+', filename)
+        style = style_match.group(1).replace('_', ' ') if style_match else "None"
+        creation_time = time.ctime(os.path.getctime(image_path))
+        table.add_row(filename, style, creation_time)
+    
+    console.print(table)
+
+def clear_output_directory(output_dir, logger):
+    """Delete all images in the output directory."""
+    image_extensions = ["*.png", "*.jpg", "*.jpeg"]
+    image_files = []
+    for ext in image_extensions:
+        image_files.extend(glob.glob(os.path.join(output_dir, ext)))
+    
+    if not image_files:
+        console.print("[yellow]No images found in output directory.[/yellow]")
+        return
+    
+    if Confirm.ask(f"[bold yellow]Delete {len(image_files)} images in {output_dir}?[/bold yellow]", default=False):
+        with Progress() as progress:
+            task = progress.add_task("[cyan]Deleting images...", total=len(image_files))
+            for image_path in image_files:
+                try:
+                    os.remove(image_path)
+                    console.print(f"[green]Deleted: {os.path.basename(image_path)}[/green]")
+                    logger.info(f"Deleted image: {image_path}")
+                except Exception as e:
+                    console.print(f"[red]Error deleting {os.path.basename(image_path)}: {str(e)}[/red]")
+                    logger.error(f"Error deleting {image_path}: {str(e)}")
+                progress.update(task, advance=1)
+
+def preview_images(output_dir):
+    """Open images in the default image viewer."""
+    image_extensions = ["*.png", "*.jpg", "*.jpeg"]
+    image_files = []
+    for ext in image_extensions:
+        image_files.extend(glob.glob(os.path.join(output_dir, ext)))
+    
+    if not image_files:
+        console.print("[yellow]No images found in output directory.[/yellow]")
+        return
+    
+    console.print(f"[bold cyan]Found {len(image_files)} images. Select images to preview.[/bold cyan]")
+    table = Table(show_header=True, header_style="bold magenta")
+    table.add_column("Number", style="cyan", width=8)
+    table.add_column("Filename", style="white")
+    
+    for i, image_path in enumerate(image_files, 1):
+        table.add_row(str(i), os.path.basename(image_path))
+    console.print(table)
+    
+    selection = Prompt.ask("[bold green]Enter image numbers (e.g., '1,3,5'), 'all', or press Enter to cancel[/bold green]").strip().lower()
+    if not selection:
+        console.print("[yellow]Preview cancelled.[/yellow]")
+        return
+    
+    if selection == "all":
+        selected_files = image_files
+    else:
+        try:
+            indices = [int(i) - 1 for i in selection.split(",") if i.strip().isdigit()]
+            selected_files = [image_files[i] for i in indices if 0 <= i < len(image_files)]
+        except ValueError:
+            console.print("[red]Invalid input. Preview cancelled.[/red]")
+            return
+    
+    system = platform.system()
+    for image_path in selected_files:
+        try:
+            if system == "Windows":
+                os.startfile(image_path)  # Windows-specific
+            elif system == "Darwin":  # macOS
+                subprocess.run(["open", image_path])
+            elif system == "Linux":
+                subprocess.run(["xdg-open", image_path])
+            else:
+                console.print(f"[yellow]Preview not supported on {system}.[/yellow]")
+                return
+            console.print(f"[green]Opened: {os.path.basename(image_path)}[/green]")
+        except Exception as e:
+            console.print(f"[red]Error opening {os.path.basename(image_path)}: {str(e)}[/red]")
 
 # --- Core Image Generator Class ---
 class PixelDalleGenerator:
@@ -205,9 +335,7 @@ class PixelDalleGenerator:
     def _fallback_get_images(self, url_encoded_prompt):
         """Fallback to GET request and parse HTML for images or redirects."""
         def request():
-            response = self.session.get(
-                f"{BING_URL}/images/create?q={url_encoded_prompt}&FORM=GENCRE", timeout=600
-            )
+            response = self.session.get(f"{BING_URL}/images/create?q={url_encoded_prompt}&FORM=GENCRE", timeout=600)
             self.log(f"GET response: Status {response.status_code}", "info")
 
             image_links = re.findall(r'src="([^"]+)"', response.text)
@@ -263,7 +391,7 @@ class PixelDalleGenerator:
                 time.sleep(2)
         raise NetworkError(ERROR_TIMEOUT)
 
-    def generate_images(self, prompt, styles=None, images_per_style=4):
+    def generate_images(self, prompt, styles=None, images_per_style=4, file_format='png'):
         """Generate up to images_per_style images for each style in styles."""
         if not prompt:
             raise ValueError("Prompt cannot be empty.")
@@ -312,7 +440,7 @@ class PixelDalleGenerator:
                     image_links = self._fallback_get_images(url_encoded_prompt)
 
                 # Save images for this style
-                saved_files = self._save_images(image_links, images_per_style, style)
+                saved_files = self._save_images(image_links, images_per_style, style, file_format)
                 all_saved_files.extend(saved_files)
                 self.log(f"Saved {len(saved_files)} images for style '{style or 'none'}'", "info")
 
@@ -324,27 +452,38 @@ class PixelDalleGenerator:
 
         return all_saved_files
 
-    def _save_images(self, links, download_count, style=None):
+    def _save_images(self, links, download_count, style=None, file_format='png'):
         """Save images to the output directory with progress."""
         num_to_download = min(download_count, len(links))
         console.print(f"\n[bold magenta]Downloading {num_to_download} image{'s' if num_to_download != 1 else ''} to {self.output_dir} ({style or 'no style'})[/bold magenta]")
+        
         saved_files = []
-        for i in track(range(num_to_download), description=f"Downloading ({style or 'no style'})..."):
-            try:
-                link = links[i]
-                response = self.session.get(link, timeout=30)
-                if response.status_code == 200:
-                    filename = generate_filename(self.output_dir, i, style)
-                    with open(filename, "wb") as f:
-                        f.write(response.content)
-                    saved_files.append(filename)
-                else:
-                    self.log(f"Failed to download image {i}: HTTP {response.status_code}", "error")
-            except requests.exceptions.RequestException as e:
-                self.log(f"Failed to download image {i}: {str(e)}", "error")
+        with Progress() as progress:
+            download_task = progress.add_task("[cyan]Downloading...", total=num_to_download)
+            for i in range(num_to_download):
+                try:
+                    link = links[i]
+                    response = self.session.get(link, timeout=30)
+                    if response.status_code == 200:
+                        filename = generate_filename(self.output_dir, len(saved_files), style, file_format)
+                        with open(filename, "wb") as f:
+                            f.write(response.content)
+                        saved_files.append(filename)
+                    else:
+                        self.log(f"Failed to download image {i}: HTTP {response.status_code}", "error")
+                except requests.exceptions.RequestException as e:
+                    self.log(f"Failed to download image {i}: {str(e)}", "error")
+                progress.update(download_task, advance=1)
+
         if not saved_files:
             self.log(f"No images saved for style '{style or 'none'}'", "warning")
         return saved_files
+
+    def create_thumbnail(self, image_path, thumbnail_path):
+        """Generate a thumbnail for the given image."""
+        with Image.open(image_path) as img:
+            img.thumbnail((128, 128))  # Resize to thumbnail
+            img.save(thumbnail_path)
 
 # --- Helper Functions for Menu ---
 def display_menu(selected_styles, images_per_style):
@@ -357,9 +496,13 @@ def display_menu(selected_styles, images_per_style):
     table.add_row("3", "Select styles for generation")
     table.add_row("4", "View or modify settings")
     table.add_row("5", "Exit program")
+    table.add_row("6", "Generate thumbnails for saved images")
+    table.add_row("7", "List generated images")
+    table.add_row("8", "Clear output directory")
+    table.add_row("9", "Preview images in output directory")
     console.print(Panel(table, expand=False))
     console.print(f"[yellow]Current styles: {', '.join(selected_styles) if selected_styles else 'None'} ({images_per_style} image{'s' if images_per_style != 1 else ''} per style)[/yellow]")
-    return Prompt.ask("[bold green]Select an option (1-5)[/bold green]", choices=["1", "2", "3", "4", "5"], default="1")
+    return Prompt.ask("[bold green]Select an option (1-9)[/bold green]", choices=["1", "2", "3", "4", "5", "6", "7", "8", "9"], default="1")
 
 def select_styles(current_styles, images_per_style):
     """Display and allow selection of styles."""
@@ -368,6 +511,7 @@ def select_styles(current_styles, images_per_style):
     table = Table(show_header=True, header_style="bold magenta")
     table.add_column("Number", style="cyan", width=8)
     table.add_column("Style", style="white")
+    
     for i, style in enumerate(ALL_STYLES, 1):
         table.add_row(str(i), style)
     console.print(table)
@@ -401,6 +545,7 @@ def display_settings(config, args):
     table.add_row("Output Directory", config["output_dir"])
     table.add_row("Images per Style", str(args.count))
     table.add_row("Log Level", args.log_level)
+    table.add_row("Authentication Cookie", "Present" if config["cookie"] else "Not Set")
     console.print(table)
 
 def modify_settings(config, args):
@@ -413,12 +558,15 @@ def modify_settings(config, args):
         args.count = IntPrompt.ask("Images per style (1-4)", default=args.count, choices=["1", "2", "3", "4"])
     if Confirm.ask("Change log level?", default=False):
         args.log_level = Prompt.ask("Log level", default=args.log_level, choices=["DEBUG", "INFO", "WARNING", "ERROR"])
+    if Confirm.ask("Change authentication cookie?", default=False):
+        new_cookie = Prompt.ask("Enter new authentication cookie", default=config["cookie"]).strip()
+        config["cookie"] = new_cookie if new_cookie else config["cookie"]
     return config, args
 
 # --- Main Execution ---
 def main():
     # Display banner
-    console.print(f"[bold cyan]Pixel's DALL-E Image Generator CLI v1.5.3 by PrimalCore[/bold cyan]")
+    console.print(f"[bold cyan]Pixel's DALL-E Image Generator CLI v1.9.8 by PrimalCore[/bold cyan]")
     console.print("[cyan]A professional CLI tool for generating AI images with interactive style variations.[/cyan]")
     console.print("[cyan]Run with --help for usage details.[/cyan]\n")
 
@@ -433,7 +581,7 @@ def main():
                "  python pixel_dalle_gen.py 'a cat' --styles 'watercolor,cyberpunk,Van Gogh'"
     )
     parser.add_argument("prompt", nargs="?", help="Image description prompt or file path with prompts")
-    parser.add_argument("--output", "-o", default="/storage/emulated/0/PixelImages", help="Output directory (default: /storage/emulated/0/PixelImages)")
+    parser.add_argument("--output", "-o", default=os.path.abspath("./PixelImages"), help="Output directory (default: ./PixelImages)")
     parser.add_argument("--count", "-c", type=int, default=4, help="Images per style (1-4, default: 4)")
     parser.add_argument("--cookie", "-k", help="Authentication cookie (overrides default and config)")
     parser.add_argument("--log-level", default="INFO", choices=["DEBUG", "INFO", "WARNING", "ERROR"],
@@ -442,10 +590,18 @@ def main():
         "--styles", "-s",
         help="Comma-separated list of styles to apply to the prompt (e.g., 'watercolor,cyberpunk,Van Gogh')"
     )
+    parser.add_argument(
+        "--format", "-f", default="png", choices=["png", "jpg", "jpeg"],
+        help="Output image file format (default: png)"
+    )
+    parser.add_argument("--verbose", action="store_true", help="Enable verbose output")
     args = parser.parse_args()
 
     # Setup logging
     logger = setup_logging(args.log_level)
+
+    if args.verbose:
+        console.print("[yellow]Verbose output mode enabled.[/yellow]")
 
     try:
         # Load or set configuration
@@ -473,9 +629,10 @@ def main():
                     console.print(f"\n[bold]Processing prompt {i}/{len(prompts)}:[/bold] {prompt}")
                     try:
                         total_images = len(styles or [None]) * min(args.count or 4, 4)
+                        total_images = len(styles or [None]) * min(args.count or 4, 4)
                         if total_images > 12 and not Confirm.ask(f"[bold yellow]Generate {total_images} images for this prompt?[/bold yellow]", default=False):
                             continue
-                        saved_files = generator.generate_images(prompt, styles=styles, images_per_style=min(args.count or 4, 4))
+                        saved_files = generator.generate_images(prompt, styles=styles, images_per_style=min(args.count or 4, 4), file_format=args.format)
                         logger.info(f"Successfully saved {len(saved_files)} images for '{prompt}'")
                         with open(os.path.join(output_dir, "generation_log.txt"), "a") as log:
                             log.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} - Success: {prompt} - {len(saved_files)} images\n")
@@ -491,7 +648,7 @@ def main():
                     total_images = len(styles or [None]) * min(args.count or 4, 4)
                     if total_images > 12 and not Confirm.ask(f"[bold yellow]Generate {total_images} images for this prompt?[/bold yellow]", default=False):
                         return
-                    saved_files = generator.generate_images(args.prompt, styles=styles, images_per_style=min(args.count or 4, 4))
+                    saved_files = generator.generate_images(args.prompt, styles=styles, images_per_style=min(args.count or 4, 4), file_format=args.format)
                     logger.info(f"Successfully saved {len(saved_files)} images for '{args.prompt}'")
                     with open(os.path.join(output_dir, "generation_log.txt"), "a") as log:
                         log.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} - Success: {args.prompt} - {len(saved_files)} images\n")
@@ -522,7 +679,7 @@ def main():
                 if total_images > 12 and not Confirm.ask(f"[bold yellow]Generate {total_images} images for this prompt?[/bold yellow]", default=False):
                     continue
                 try:
-                    saved_files = generator.generate_images(prompt, styles=curr_styles, images_per_style=args.count)
+                    saved_files = generator.generate_images(prompt, styles=curr_styles, images_per_style=args.count, file_format=args.format)
                     console.print(f"[bold green]Saved {len(saved_files)} images for '{prompt}'.[/bold green]")
                     logger.info(f"Successfully saved {len(saved_files)} images for '{prompt}'")
                     with open(os.path.join(output_dir, "generation_log.txt"), "a") as log:
@@ -552,7 +709,7 @@ def main():
                 for i, prompt in enumerate(prompts, 1):
                     console.print(f"\n[bold]Processing prompt {i}/{len(prompts)}:[/bold] {prompt}")
                     try:
-                        saved_files = generator.generate_images(prompt, styles=curr_styles, images_per_style=args.count)
+                        saved_files = generator.generate_images(prompt, styles=curr_styles, images_per_style=args.count, file_format=args.format)
                         logger.info(f"Successfully saved {len(saved_files)} images for '{prompt}'")
                         with open(os.path.join(output_dir, "generation_log.txt"), "a") as log:
                             log.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} - Success: {prompt} - {len(saved_files)} images\n")
@@ -578,6 +735,38 @@ def main():
                 if Confirm.ask("[bold yellow]Are you sure you want to exit?[/bold yellow]", default=False):
                     console.print("[bold green]Exiting program.[/bold green]")
                     break
+
+            elif choice == "6":
+                try:
+                    generate_thumbnails(generator)
+                    logger.info("Thumbnail generation completed")
+                except Exception as e:
+                    console.print(f"[red]Error generating thumbnails: {str(e)}[/red]")
+                    logger.error(f"Error generating thumbnails: {str(e)}")
+
+            elif choice == "7":
+                try:
+                    list_generated_images(output_dir)
+                    logger.info("Listed generated images")
+                except Exception as e:
+                    console.print(f"[red]Error listing images: {str(e)}[/red]")
+                    logger.error(f"Error listing images: {str(e)}")
+
+            elif choice == "8":
+                try:
+                    clear_output_directory(output_dir, logger)
+                    logger.info("Cleared output directory")
+                except Exception as e:
+                    console.print(f"[red]Error clearing output directory: {str(e)}[/red]")
+                    logger.error(f"Error clearing output directory: {str(e)}")
+
+            elif choice == "9":
+                try:
+                    preview_images(output_dir)
+                    logger.info("Previewed images")
+                except Exception as e:
+                    console.print(f"[red]Error previewing images: {str(e)}[/red]")
+                    logger.error(f"Error previewing images: {str(e)}")
 
         # Save updated config
         save_config(auth_cookie, output_dir)
