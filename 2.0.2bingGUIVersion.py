@@ -2,8 +2,8 @@
 # --- Script Details ---
 # Script:     Pixel's DALL-E Image Generator GUI with Preview
 # Author:     Primal Core
-# Version:    2.0.2
-# Description: Professional Tkinter GUI for generating AI images with interactive style variations and image preview.
+# Version:    2.0.3
+# Description: Professional Tkinter GUI for generating AI images with interactive style variations, image preview, and scrollable image list.
 # License:    MIT
 # Dependencies: requests, rich, Pillow, tkinter
 # Usage:      Run in Pydroid 3 to launch the GUI with image preview.
@@ -353,7 +353,7 @@ class PixelDalleGenerator:
 class PixelDalleGUI:
     def __init__(self, root):
         self.root = root
-        self.root.title("Pixel's DALL-E Image Generator v2.0.2")
+        self.root.title("Pixel's DALL-E Image Generator v2.0.3")
         self.root.geometry("1200x800")  # Increased size to accommodate preview
         self.root.configure(bg="#2e2e2e")
         self.config, self.custom_styles = load_config()
@@ -431,13 +431,18 @@ class PixelDalleGUI:
         self.log_text.pack(fill="both", pady=5)
         self.log_text.config(state="disabled")
 
-        # Image list
+        # Image list with scrollbar
         ttk.Label(right_frame, text="Generated Images:").pack(anchor="w")
-        self.image_tree = ttk.Treeview(right_frame, columns=("Filename", "Style", "Creation Time"), show="headings", height=8)
+        image_frame = ttk.Frame(right_frame)
+        image_frame.pack(fill="both", pady=5)
+        self.image_tree = ttk.Treeview(image_frame, columns=("Filename", "Style", "Creation Time"), show="headings", height=8)
         self.image_tree.heading("Filename", text="Filename")
         self.image_tree.heading("Style", text="Style")
         self.image_tree.heading("Creation Time", text="Creation Time")
-        self.image_tree.pack(fill="both", pady=5)
+        self.image_tree.pack(side="left", fill="both", expand=True)
+        scrollbar = ttk.Scrollbar(image_frame, orient="vertical", command=self.image_tree.yview)
+        scrollbar.pack(side="right", fill="y")
+        self.image_tree.configure(yscrollcommand=scrollbar.set)
         self.image_tree.bind("<Double-1>", self.on_image_double_click)
 
         # Image preview
@@ -453,6 +458,27 @@ class PixelDalleGUI:
         except Exception as e:
             self.log_message("ERROR", f"Failed to load image {image_path}: {str(e)}")
             return None
+
+    def show_large_preview(self, image_path):
+        try:
+            with Image.open(image_path) as img:
+                # Calculate size to fit within 80% of screen dimensions
+                screen_width = self.root.winfo_screenwidth()
+                screen_height = self.root.winfo_screenheight()
+                max_width = int(screen_width * 0.8)
+                max_height = int(screen_height * 0.8)
+                img.thumbnail((max_width, max_height), Image.Resampling.LANCZOS)
+                photo = ImageTk.PhotoImage(img)
+
+                dialog = tk.Toplevel(self.root)
+                dialog.title(os.path.basename(image_path))
+                dialog.configure(bg="#2e2e2e")
+                label = ttk.Label(dialog, image=photo)
+                label.image = photo  # Keep reference
+                label.pack(padx=10, pady=10)
+                ttk.Button(dialog, text="Close", command=dialog.destroy).pack(pady=5)
+        except Exception as e:
+            self.log_message("ERROR", f"Failed to load large preview for {image_path}: {str(e)}")
 
     def update_preview(self, image_path):
         if not image_path or not os.path.exists(image_path):
@@ -738,6 +764,7 @@ class PixelDalleGUI:
             filename = self.image_tree.item(item)["values"][0]
             image_path = os.path.join(self.output_dir, filename)
             self.update_preview(image_path)
+            self.show_large_preview(image_path)
 
     def clear_output_directory(self):
         image_extensions = ["*.png", "*.jpg", "*.jpeg"]
@@ -761,11 +788,13 @@ class PixelDalleGUI:
         help_text = (
             "Pixel's DALL-E Image Generator GUI - Help\n\n"
             "Overview:\n"
-            "This GUI generates AI images using Bing's DALL-E integration, with a preview panel for viewing images.\n\n"
+            "This GUI generates AI images using Bing's DALL-E integration, with a scrollable image list and preview panel.\n\n"
             "Features:\n"
             "- Generate images with a single prompt or from a file.\n"
             "- Select from 30+ styles (e.g., watercolor, cyberpunk, anime).\n"
+            "- Scrollable image list for easy navigation.\n"
             "- Preview generated or selected images in the GUI.\n"
+            "- Double-click an image in the list to view a larger preview in a pop-out window.\n"
             "- Manage settings (output directory, images per style, log level, cookie, custom styles).\n"
             "- Generate thumbnails for selected images.\n"
             "- List or clear generated images.\n\n"
@@ -774,13 +803,13 @@ class PixelDalleGUI:
             "- Use the 'Select Styles' button to choose styles.\n"
             "- Configure settings via the 'Settings' button.\n"
             "- Use 'Generate Thumbnails', 'List Images', or 'Clear Output Directory' for image management.\n"
-            "- Double-click an image in the list to preview it in the GUI.\n"
+            "- Double-click an image in the list to preview it in the GUI and open a larger preview window.\n"
             "- Logs are displayed in the right panel.\n\n"
             "Notes:\n"
             "- Images are saved in the output directory (default: ./PixelImages).\n"
             "- Prompt files should contain one prompt per line.\n"
             "- Custom styles can be added in the settings.\n"
-            "- The preview panel shows the selected or most recently generated image."
+            "- The preview panel shows the selected or most recently generated image, with a larger view available on double-click."
         )
         messagebox.showinfo("Help", help_text)
 
