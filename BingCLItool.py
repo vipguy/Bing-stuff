@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-# =====================================
+# --- Script Details ---
 # Script:     Pixel's DALL-E Image Generator CLI
 # Author:     Primal Core
-# Version:    1.9.8
-# Description: A professional CLI tool to fetch AI-generated images with interactive style variations.
+# Version:    2.0.1
+# Description: Advanced CLI tool for generating AI images with interactive style variations.
 # License:    MIT
 # Dependencies: requests, rich, Pillow
-# Usage:      Run it =====================================
+# Usage:      Access the interactive help menu (option 10) for detailed guidance.
 
 import os
 import random
@@ -26,7 +26,7 @@ from io import BytesIO
 try:
     from rich.console import Console
     from rich.logging import RichHandler
-    from rich.progress import track, Progress
+    from rich.progress import Progress
     from rich.table import Table
     from rich.panel import Panel
     from rich.prompt import Prompt, IntPrompt, Confirm
@@ -72,12 +72,14 @@ ERROR_REDIRECT = "Failed to follow redirect. Please check cookie or network."
 ERROR_BLOCKED_PROMPT = "Prompt blocked due to sensitive content."
 ERROR_NO_IMAGES = "No images found in response."
 
-# --- Popular Styles List for "all" Option ---
+# --- Popular Styles List ---
 ALL_STYLES = [
-    "watercolor", "oil painting", "cyberpunk", "steampunk", "cartoon", "anime",
-    "photorealistic", "pixel art", "low poly", "noir", "futuristic", "retro",
-    "fantasy", "impressionist", "Van Gogh", "Picasso", "minimalist", "surreal",
-    "vaporwave", "gothic", "pop art", "comic book", "sketch", "chibi"
+    "watercolor", "oil painting", "impressionist", "renaissance", "baroque",
+    "abstract", "surrealist", "cubist", "expressionist", "pop art",
+    "cyberpunk", "synthwave", "vaporwave", "futuristic", "holographic",
+    "anime", "cartoon", "chibi", "comic book", "pixel art",
+    "ukiyo-e", "mandala", "art nouveau", "gothic", "folk art",
+    "photorealistic", "minimalist", "steampunk", "low poly", "sketch"
 ]
 
 # --- Exceptions ---
@@ -113,20 +115,23 @@ def setup_logging(log_level="INFO"):
 
 def load_config():
     """Load settings from config file if it exists."""
-    config = {"cookie": DEFAULT_AUTH_COOKIE, "output_dir": os.path.abspath("./PixelImages")}
+    config = {"cookie": DEFAULT_AUTH_COOKIE, "output_dir": os.path.abspath("./PixelImages"), "custom_styles": ""}
     if os.path.exists(CONFIG_FILE):
         with open(CONFIG_FILE, "r") as f:
             for line in f:
                 if "=" in line and not line.strip().startswith("#"):
                     key, value = [x.strip() for x in line.split("=", 1)]
                     config[key] = value
-    return config
+    custom_styles = config.get("custom_styles", "").split(",") if config["custom_styles"] else []
+    custom_styles = [s.strip() for s in custom_styles if s.strip()]
+    return config, custom_styles
 
-def save_config(cookie, output_dir):
+def save_config(cookie, output_dir, custom_styles):
     """Save settings to config file."""
     with open(CONFIG_FILE, "w") as f:
         f.write(f"cookie={cookie}\n")
         f.write(f"output_dir={output_dir}\n")
+        f.write(f"custom_styles={','.join(custom_styles)}\n")
 
 def create_directory(output_dir):
     """Create the output directory if it doesn't exist."""
@@ -169,29 +174,99 @@ def retry_request(func, max_attempts=3, base_delay=2):
             console.print(f"[yellow]Attempt {attempt + 1} failed: {str(e)}. Retrying in {delay}s...[/yellow]")
             time.sleep(delay)
 
-def generate_thumbnails(generator):
-    """Generate thumbnails for all images in the output directory."""
+def generate_thumbnails(config, generator):
+    """Generate thumbnails for selected images with customizable options."""
     image_extensions = ["*.png", "*.jpg", "*.jpeg"]
     image_files = []
     for ext in image_extensions:
-        image_files.extend(glob.glob(os.path.join(generator.output_dir, ext)))
+        image_files.extend(glob.glob(os.path.join(config["output_dir"], ext)))
     
     if not image_files:
         console.print("[yellow]No images found in output directory.[/yellow]")
         return
     
-    console.print(f"[bold cyan]Generating thumbnails for {len(image_files)} images...[/bold cyan]")
+    console.print(f"[bold cyan]Found {len(image_files)} images. Select images for thumbnail generation.[/bold cyan]")
+    table = Table(show_header=True, header_style="bold magenta")
+    table.add_column("Number", style="cyan", width=8)
+    table.add_column("Filename", style="white")
+    for i, image_path in enumerate(image_files, 1):
+        table.add_row(str(i), os.path.basename(image_path))
+    console.print(table)
+    
+    selection = Prompt.ask(
+        "[bold green]Enter image numbers (e.g., '1,3,5'), 'all', or press Enter to cancel[/bold green]",
+        default=""
+    ).strip().lower()
+    if not selection:
+        console.print("[yellow]Thumbnail generation cancelled.[/yellow]")
+        return
+    
+    if selection == "all":
+        selected_files = image_files
+    else:
+        try:
+            indices = [int(i) - 1 for i in selection.split(",") if i.strip().isdigit()]
+            selected_files = [image_files[i] for i in indices if 0 <= i < len(image_files)]
+        except ValueError:
+            console.print("[red]Invalid selection. Cancelling.[/red]")
+            return
+    
+    thumb_size = IntPrompt.ask(
+        "[bold green]Enter thumbnail size (pixels, e.g., 128 for 128x128)[/bold green]",
+        default=128
+    )
+    thumb_format = Prompt.ask(
+        "[bold green]Enter thumbnail format (png/jpg)[/bold green]",
+        choices=["png", "jpg"],
+        default="png"
+    )
+    thumb_dir = os.path.join(config["output_dir"], "thumbnails")
+    create_directory(thumb_dir)
+    
+    overwrite = Confirm.ask(
+        "[yellow]Overwrite existing thumbnails if they exist?[/yellow]",
+        default=False
+    )
+    
+    if not Confirm.ask(
+        f"[bold yellow]Generate {len(selected_files)} thumbnails (size: {thumb_size}x{thumb_size}, format: {thumb_format}) "
+        f"in {thumb_dir}?[/bold yellow]",
+        default=True
+    ):
+        console.print("[yellow]Thumbnail generation cancelled.[/yellow]")
+        return
+    
+    generated = 0
+    skipped = 0
+    failed = 0
+    console.print(f"[bold cyan]Generating {len(selected_files)} thumbnails...[/bold cyan]")
     with Progress() as progress:
-        task = progress.add_task("[cyan]Generating thumbnails...", total=len(image_files))
-        for image_path in image_files:
-            thumbnail_path = os.path.splitext(image_path)[0] + "_thumb.png"
+        task = progress.add_task("[cyan]Generating thumbnails...", total=len(selected_files))
+        for image_path in selected_files:
+            thumb_filename = f"{os.path.splitext(os.path.basename(image_path))[0]}_thumb.{thumb_format}"
+            thumb_path = os.path.join(thumb_dir, thumb_filename)
+            
+            if os.path.exists(thumb_path) and not overwrite:
+                console.print(f"[yellow]Skipped existing thumbnail: {thumb_filename}[/yellow]")
+                skipped += 1
+                progress.update(task, advance=1)
+                continue
+            
             try:
-                generator.create_thumbnail(image_path, thumbnail_path)
-                console.print(f"[green]Generated thumbnail: {os.path.basename(thumbnail_path)}[/green]")
-            except Exception as e:
-                console.print(f"[red]Error generating thumbnail for {os.path.basename(image_path)}: {str(e)}[/red]")
-                generator.log(f"Error generating thumbnail for {image_path}: {str(e)}", "error")
+                generator.create_thumbnail(image_path, thumb_path, size=(thumb_size, thumb_size), output_format=thumb_format)
+                console.print(f"[green]Generated: {thumb_filename}[/green]")
+                generated += 1
+            except (Image.UnidentifiedImageError, PermissionError, ValueError) as e:
+                console.print(f"[red]Failed to generate thumbnail for {os.path.basename(image_path)}: {str(e)}[/red]")
+                generator.log(f"Thumbnail error for {image_path}: {str(e)}", "error")
+                failed += 1
             progress.update(task, advance=1)
+    
+    console.print(f"\n[bold green]Thumbnail Generation Summary:[/bold green]")
+    console.print(f"[green]Generated: {generated}[/green]")
+    console.print(f"[yellow]Skipped: {skipped}[/yellow]")
+    console.print(f"[red]Failed: {failed}[/red]")
+    generator.log(f"Thumbnail generation: {generated} generated, {skipped} skipped, {failed} failed", "info")
 
 def list_generated_images(output_dir):
     """List all images in the output directory with details."""
@@ -211,7 +286,6 @@ def list_generated_images(output_dir):
     
     for image_path in image_files:
         filename = os.path.basename(image_path)
-        # Extract style from filename (assumes format: pixel_image_<style>_timestamp_index.ext)
         style_match = re.search(r'pixel_image_([^_]+)_[\d_]+\.\w+', filename)
         style = style_match.group(1).replace('_', ' ') if style_match else "None"
         creation_time = time.ctime(os.path.getctime(image_path))
@@ -282,8 +356,8 @@ def preview_images(output_dir):
     for image_path in selected_files:
         try:
             if system == "Windows":
-                os.startfile(image_path)  # Windows-specific
-            elif system == "Darwin":  # macOS
+                os.startfile(image_path)
+            elif system == "Darwin":
                 subprocess.run(["open", image_path])
             elif system == "Linux":
                 subprocess.run(["xdg-open", image_path])
@@ -354,7 +428,7 @@ class PixelDalleGenerator:
                 if request_id:
                     self.session.get(f"{BING_URL}{redirect_url}")
                     polling_url = f"{BING_URL}/images/create/async/results/{request_id}?q={url_encoded_prompt}"
-                    return self._poll_images(polling_url, images_per_style=4)  # Default for fallback
+                    return self._poll_images(polling_url, images_per_style=4)
 
             form_actions = re.findall(r'<form[^>]+action="([^"]+)"', response.text)
             if form_actions:
@@ -367,7 +441,7 @@ class PixelDalleGenerator:
                     request_id = redirect_url.split("id=")[-1]
                     self.session.get(f"{BING_URL}{redirect_url}")
                     polling_url = f"{BING_URL}/images/create/async/results/{request_id}?q={url_encoded_prompt}"
-                    return self._poll_images(polling_url, images_per_style=4)  # Default for fallback
+                    return self._poll_images(polling_url, images_per_style=4)
 
             raise NetworkError(ERROR_REDIRECT)
         return retry_request(request)
@@ -402,7 +476,7 @@ class PixelDalleGenerator:
         if blocked:
             raise BlockedPromptError(f"Blocked due to: {word}")
 
-        styles = styles or [None]  # Default to no style if none provided
+        styles = styles or [None]
         all_saved_files = []
 
         for style in styles:
@@ -414,13 +488,11 @@ class PixelDalleGenerator:
                 url_encoded_prompt = quote(styled_prompt)
                 payload = f"q={url_encoded_prompt}&qs=ds"
 
-                # Preload to capture cookies
                 preload_response = self.session.get(f"{BING_URL}/images/create", timeout=30)
                 if preload_response.status_code == 200:
                     self.session.cookies.update(preload_response.cookies)
                     self.log("Preloaded page, captured cookies", "info")
 
-                # Try POST with different rt parameters
                 image_links = None
                 for rt in ["4", "3", None]:
                     url = f"{BING_URL}/images/create?q={url_encoded_prompt}&FORM=GENCRE"
@@ -435,11 +507,9 @@ class PixelDalleGenerator:
                         image_links = self._poll_images(polling_url, images_per_style)
                         break
 
-                # Fallback to GET if POST fails
                 if not image_links:
                     image_links = self._fallback_get_images(url_encoded_prompt)
 
-                # Save images for this style
                 saved_files = self._save_images(image_links, images_per_style, style, file_format)
                 all_saved_files.extend(saved_files)
                 self.log(f"Saved {len(saved_files)} images for style '{style or 'none'}'", "info")
@@ -448,7 +518,7 @@ class PixelDalleGenerator:
                 self.log(f"Error for '{styled_prompt}': {str(e)}", "error")
                 console.print(f"[red]Error for style '{style or 'none'}': {str(e)}[/red]")
 
-            time.sleep(2)  # Brief pause between styles to avoid rate limiting
+            time.sleep(2)
 
         return all_saved_files
 
@@ -479,11 +549,16 @@ class PixelDalleGenerator:
             self.log(f"No images saved for style '{style or 'none'}'", "warning")
         return saved_files
 
-    def create_thumbnail(self, image_path, thumbnail_path):
+    def create_thumbnail(self, image_path, thumbnail_path, size=(128, 128), output_format='png'):
         """Generate a thumbnail for the given image."""
-        with Image.open(image_path) as img:
-            img.thumbnail((128, 128))  # Resize to thumbnail
-            img.save(thumbnail_path)
+        try:
+            with Image.open(image_path) as img:
+                img.thumbnail(size, Image.Resampling.LANCZOS)
+                img.save(thumbnail_path, format=output_format.upper())
+        except Image.UnidentifiedImageError:
+            raise ValueError("Invalid or corrupted image file")
+        except PermissionError:
+            raise PermissionError(f"No write permission for {thumbnail_path}")
 
 # --- Helper Functions for Menu ---
 def display_menu(selected_styles, images_per_style):
@@ -500,9 +575,50 @@ def display_menu(selected_styles, images_per_style):
     table.add_row("7", "List generated images")
     table.add_row("8", "Clear output directory")
     table.add_row("9", "Preview images in output directory")
+    table.add_row("10", "View help and usage information")
     console.print(Panel(table, expand=False))
     console.print(f"[yellow]Current styles: {', '.join(selected_styles) if selected_styles else 'None'} ({images_per_style} image{'s' if images_per_style != 1 else ''} per style)[/yellow]")
-    return Prompt.ask("[bold green]Select an option (1-9)[/bold green]", choices=["1", "2", "3", "4", "5", "6", "7", "8", "9"], default="1")
+    return Prompt.ask("[bold green]Select an option (1-10)[/bold green]", choices=["1", "2", "3", "4", "5", "6", "7", "8", "9", "10"], default="1")
+
+def display_help():
+    """Display a detailed help menu with usage information."""
+    help_text = (
+        "[bold cyan]Pixel's DALL-E Image Generator CLI - Help Menu[/bold cyan]\n\n"
+        "[bold]Overview[/bold]\n"
+        "This tool generates AI images using Bing's DALL-E integration. It supports interactive mode for generating images with various styles, managing output, and configuring settings. You can also use command-line arguments for quick execution.\n\n"
+        "[bold]Menu Options[/bold]\n"
+        "- [cyan]1. Generate images with a new prompt[/cyan]: Enter a single prompt (e.g., 'a sunset over mountains') and generate images with selected styles.\n"
+        "- [cyan]2. Generate images from a prompt file[/cyan]: Provide a text file with one prompt per line (e.g., 'prompts.txt') to batch-generate images.\n"
+        "- [cyan]3. Select styles for generation[/cyan]: Choose from 30+ styles (e.g., watercolor, cyberpunk, anime) or use 'all' for all styles.\n"
+        "- [cyan]4. View or modify settings[/cyan]: View or change output directory, images per style, log level, cookie, or custom styles.\n"
+        "- [cyan]5. Exit program[/cyan]: Exit the interactive mode.\n"
+        "- [cyan]6. Generate thumbnails for saved images[/cyan]: Create thumbnails (custom size/format) for selected images, saved in a 'thumbnails' subfolder.\n"
+        "- [cyan]7. List generated images[/cyan]: Display a table of saved images with filenames, styles, and creation times.\n"
+        "- [cyan]8. Clear output directory[/cyan]: Delete all images in the output directory after confirmation.\n"
+        "- [cyan]9. Preview images in output directory[/cyan]: Open selected images in your default image viewer.\n"
+        "- [cyan]10. View help and usage information[/cyan]: Show this help menu.\n\n"
+        "[bold]Command-Line Arguments[/bold]\n"
+        "- [cyan]prompt[/cyan]: A single prompt or path to a prompt file.\n"
+        "- [cyan]--output, -o[/cyan]: Output directory (default: ./PixelImages).\n"
+        "- [cyan]--count, -c[/cyan]: Images per style (1-4, default: 4).\n"
+        "- [cyan]--cookie, -k[/cyan]: Authentication cookie (overrides config).\n"
+        "- [cyan]--log-level[/cyan]: Logging level (DEBUG, INFO, WARNING, ERROR; default: INFO).\n"
+        "- [cyan]--styles, -s[/cyan]: Comma-separated styles (e.g., 'watercolor,anime').\n"
+        "- [cyan]--format, -f[/cyan]: Image format (png, jpg, jpeg; default: png).\n"
+        "- [cyan]--verbose[/cyan]: Enable verbose output.\n\n"
+        "[bold]Examples[/bold]\n"
+        "- Interactive mode: [cyan]python pixel_dalle_gen.py[/cyan]\n"
+        "- Single prompt: [cyan]python pixel_dalle_gen.py 'a dragon in ukiyo-e style' -o ./images -c 3[/cyan]\n"
+        "- Prompt file: [cyan]python pixel_dalle_gen.py prompts.txt -o ./images --log-level DEBUG[/cyan]\n"
+        "- Specific styles: [cyan]python pixel_dalle_gen.py 'a cityscape' --styles 'cyberpunk,holographic'[/cyan]\n\n"
+        "[bold]Notes[/bold]\n"
+        "- Create a prompt file (e.g., 'prompts.txt') with one prompt per line.\n"
+        "- Custom styles can be added via the config file (pixel_dalle_config.ini) or settings menu.\n"
+        "- Images are saved in the output directory with filenames like 'pixel_image_style_timestamp_index.png'.\n"
+        "- For command-line help, use: [cyan]python pixel_dalle_gen.py --help[/cyan]."
+    )
+    console.print(Panel(help_text, expand=False))
+    Prompt.ask("[bold green]Press Enter to return to the main menu[/bold green]")
 
 def select_styles(current_styles, images_per_style):
     """Display and allow selection of styles."""
@@ -511,9 +627,43 @@ def select_styles(current_styles, images_per_style):
     table = Table(show_header=True, header_style="bold magenta")
     table.add_column("Number", style="cyan", width=8)
     table.add_column("Style", style="white")
+    table.add_column("Description", style="white")
+    
+    style_descriptions = {
+        "watercolor": "Soft, translucent colors with fluid brushstrokes",
+        "oil painting": "Rich, textured, vibrant traditional painting",
+        "impressionist": "Loose brushwork, vibrant colors like Monet",
+        "renaissance": "Classical, detailed, like Michelangelo",
+        "baroque": "Dramatic, ornate, like Caravaggio",
+        "abstract": "Non-representational shapes and colors",
+        "surrealist": "Dreamlike, bizarre, like Dalí",
+        "cubist": "Geometric, fragmented, like Picasso",
+        "expressionist": "Emotional, bold, like Munch",
+        "pop art": "Bold, colorful, like Warhol",
+        "cyberpunk": "Neon, dystopian, high-tech urban",
+        "synthwave": "Retro-futuristic, neon, 80s-inspired",
+        "vaporwave": "Nostalgic, surreal, pastel digital",
+        "futuristic": "Sleek, sci-fi, advanced tech",
+        "holographic": "Iridescent, glowing, futuristic 3D",
+        "anime": "Japanese animation, vibrant, expressive",
+        "cartoon": "Simplified, exaggerated, Western animation",
+        "chibi": "Cute, small, exaggerated anime characters",
+        "comic book": "Bold outlines, superhero-inspired",
+        "pixel art": "Retro, low-resolution digital art",
+        "ukiyo-e": "Japanese woodblock print, elegant",
+        "mandala": "Intricate, symmetrical, spiritual",
+        "art nouveau": "Ornate, flowing, nature-inspired",
+        "gothic": "Dark, medieval, architectural",
+        "folk art": "Traditional, regional, handcrafted",
+        "photorealistic": "Hyper-realistic, lifelike",
+        "minimalist": "Simple, clean, minimal elements",
+        "steampunk": "Victorian, mechanical, retro-futuristic",
+        "low poly": "Geometric, polygonal 3D",
+        "sketch": "Hand-drawn, pencil-like, rough"
+    }
     
     for i, style in enumerate(ALL_STYLES, 1):
-        table.add_row(str(i), style)
+        table.add_row(str(i), style, style_descriptions.get(style, "Custom style"))
     console.print(table)
 
     console.print("[yellow]Enter style numbers (e.g., '1,3,5'), 'all', or press Enter for none[/yellow]")
@@ -546,6 +696,7 @@ def display_settings(config, args):
     table.add_row("Images per Style", str(args.count))
     table.add_row("Log Level", args.log_level)
     table.add_row("Authentication Cookie", "Present" if config["cookie"] else "Not Set")
+    table.add_row("Custom Styles", config["custom_styles"] or "None")
     console.print(table)
 
 def modify_settings(config, args):
@@ -561,14 +712,17 @@ def modify_settings(config, args):
     if Confirm.ask("Change authentication cookie?", default=False):
         new_cookie = Prompt.ask("Enter new authentication cookie", default=config["cookie"]).strip()
         config["cookie"] = new_cookie if new_cookie else config["cookie"]
+    if Confirm.ask("Change custom styles?", default=False):
+        new_styles = Prompt.ask("Enter custom styles (comma-separated)", default=config["custom_styles"]).strip()
+        config["custom_styles"] = new_styles if new_styles else config["custom_styles"]
     return config, args
 
 # --- Main Execution ---
 def main():
     # Display banner
-    console.print(f"[bold cyan]Pixel's DALL-E Image Generator CLI v1.9.8 by PrimalCore[/bold cyan]")
+    console.print(f"[bold cyan]Pixel's DALL-E Image Generator CLI v2.0.1 by PrimalCore[/bold cyan]")
     console.print("[cyan]A professional CLI tool for generating AI images with interactive style variations.[/cyan]")
-    console.print("[cyan]Run with --help for usage details.[/cyan]\n")
+    console.print("[cyan]Select 'Help' (option 10) in the menu for detailed usage guidance.[/cyan]\n")
 
     # Parse command-line arguments
     parser = argparse.ArgumentParser(
@@ -578,7 +732,7 @@ def main():
                "  python pixel_dalle_gen.py 'a beautiful sunset' -o ./images -c 3\n"
                "  python pixel_dalle_gen.py prompts.txt -o ./images --log-level DEBUG\n"
                "  python pixel_dalle_gen.py --cookie '_U=YOUR_COOKIE' -o ./images\n"
-               "  python pixel_dalle_gen.py 'a cat' --styles 'watercolor,cyberpunk,Van Gogh'"
+               "  python pixel_dalle_gen.py 'a cat' --styles 'watercolor,cyberpunk,ukiyo-e'"
     )
     parser.add_argument("prompt", nargs="?", help="Image description prompt or file path with prompts")
     parser.add_argument("--output", "-o", default=os.path.abspath("./PixelImages"), help="Output directory (default: ./PixelImages)")
@@ -588,7 +742,7 @@ def main():
                         help="Logging level (default: INFO)")
     parser.add_argument(
         "--styles", "-s",
-        help="Comma-separated list of styles to apply to the prompt (e.g., 'watercolor,cyberpunk,Van Gogh')"
+        help="Comma-separated list of styles to apply to the prompt (e.g., 'watercolor,cyberpunk,ukiyo-e')"
     )
     parser.add_argument(
         "--format", "-f", default="png", choices=["png", "jpg", "jpeg"],
@@ -605,9 +759,10 @@ def main():
 
     try:
         # Load or set configuration
-        config = load_config()
+        config, custom_styles = load_config()
         auth_cookie = args.cookie or config["cookie"]
         output_dir = args.output or config["output_dir"]
+        ALL_STYLES.extend([s for s in custom_styles if s not in ALL_STYLES])
 
         # Validate count
         if args.count and (args.count < 1 or args.count > 4):
@@ -628,7 +783,6 @@ def main():
                 for i, prompt in enumerate(prompts, 1):
                     console.print(f"\n[bold]Processing prompt {i}/{len(prompts)}:[/bold] {prompt}")
                     try:
-                        total_images = len(styles or [None]) * min(args.count or 4, 4)
                         total_images = len(styles or [None]) * min(args.count or 4, 4)
                         if total_images > 12 and not Confirm.ask(f"[bold yellow]Generate {total_images} images for this prompt?[/bold yellow]", default=False):
                             continue
@@ -660,7 +814,7 @@ def main():
 
         # Interactive menu loop
         console.print("\n[bold green]Starting interactive mode.[/bold green]")
-        selected_styles = styles  # Initialize with command-line styles, if any
+        selected_styles = styles
         while True:
             choice = display_menu(selected_styles, args.count)
             if choice == "1":
@@ -670,7 +824,7 @@ def main():
                 else:
                     curr_styles = select_styles(selected_styles, args.count)
                     if curr_styles:
-                        selected_styles = curr_styles  # Update global styles
+                        selected_styles = curr_styles
                 prompt = Prompt.ask("[bold green]Enter a prompt[/bold green]").strip()
                 if not prompt:
                     console.print("[red]Prompt cannot be empty.[/red]")
@@ -697,7 +851,7 @@ def main():
                 else:
                     curr_styles = select_styles(selected_styles, args.count)
                     if curr_styles:
-                        selected_styles = curr_styles  # Update global styles
+                        selected_styles = curr_styles
                 file_path = Prompt.ask("[bold green]Enter prompt file path[/bold green]").strip()
                 if not os.path.isfile(file_path):
                     console.print("[red]File not found.[/red]")
@@ -728,6 +882,9 @@ def main():
                 display_settings(config, args)
                 config, args = modify_settings(config, args)
                 output_dir = config["output_dir"]
+                custom_styles = config["custom_styles"].split(",") if config["custom_styles"] else []
+                custom_styles = [s.strip() for s in custom_styles if s.strip()]
+                ALL_STYLES.extend([s for s in custom_styles if s not in ALL_STYLES])
                 logger = setup_logging(args.log_level)
                 generator = PixelDalleGenerator(auth_cookie, output_dir, logger)
 
@@ -738,7 +895,7 @@ def main():
 
             elif choice == "6":
                 try:
-                    generate_thumbnails(generator)
+                    generate_thumbnails(config, generator)
                     logger.info("Thumbnail generation completed")
                 except Exception as e:
                     console.print(f"[red]Error generating thumbnails: {str(e)}[/red]")
@@ -768,8 +925,11 @@ def main():
                     console.print(f"[red]Error previewing images: {str(e)}[/red]")
                     logger.error(f"Error previewing images: {str(e)}")
 
+            elif choice == "10":
+                display_help()
+
         # Save updated config
-        save_config(auth_cookie, output_dir)
+        save_config(auth_cookie, output_dir, custom_styles)
 
     except Exception as e:
         logger.error(f"Application error: {str(e)}")
